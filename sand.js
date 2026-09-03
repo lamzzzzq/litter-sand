@@ -319,6 +319,11 @@ const scoop = new THREE.Group(); scoop.rotation.y = YAW; scene.add(scoop);
 const gridToWorld = (gx, gy) => [-TRAY_W / 2 + gx * CELL, row0z < 0 ? -TRAY_D / 2 + gy * CELL : TRAY_D / 2 - gy * CELL];
 const toLocal = (wx, wz) => { const dx = wx - SC.px, dz = wz - SC.pz; return [dx * Math.cos(YAW) - dz * Math.sin(YAW), dx * Math.sin(YAW) + dz * Math.cos(YAW)]; };
 const blade = new THREE.Group(); scoop.add(blade);
+// 铲面剖面：前沿(z=-BD/2)是 0 高的平刃，FLAT_Z 之后起翘成后壁；侧壁从前沿一路爬到后壁顶
+const BACK_H = 4.6, FLAT_Z = BD / 2 - 4.6;
+const bladeFloorY = z => z <= FLAT_Z ? 0 : BACK_H * (1 - Math.cos((z - FLAT_Z) / (BD / 2 - FLAT_Z) * Math.PI / 2));
+const bladeSideY = z => BACK_H * Math.pow(Math.max(0, Math.min(1, (z + BD / 2) / BD)), 1.35);
+const backZAtY = y => FLAT_Z + Math.acos(1 - Math.min(1, y / BACK_H)) / (Math.PI / 2) * (BD / 2 - FLAT_Z);
 // 两点之间生成一根杆：端点对端点，不会像手算 position+rotation 那样对不上
 function rodBetween(a, b, r0, r1, mat, seg = 10) {
   const dir = new THREE.Vector3().subVectors(b, a), len = dir.length();
@@ -328,18 +333,39 @@ function rodBetween(a, b, r0, r1, mat, seg = 10) {
   return m;
 }
 {
-  const pts = []; const rr = 1.2; const segs = 8;
-  const corner = (cx, cz, a0) => { for (let i = 0; i <= segs; i++) { const a = a0 + i / segs * Math.PI / 2; pts.push(new THREE.Vector3(cx + Math.cos(a) * rr, 0, cz + Math.sin(a) * rr)); } };
-  corner(BW / 2 - rr, -BD / 2 + rr, -Math.PI / 2); corner(BW / 2 - rr, BD / 2 - rr, 0); corner(-BW / 2 + rr, BD / 2 - rr, Math.PI / 2); corner(-BW / 2 + rr, -BD / 2 + rr, Math.PI);
-  const frame = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 120, WIRE, 8, true), wireMat); frame.castShadow = true; blade.add(frame);
-  for (let i = 0; i < BARS; i++) { const x = -BW / 2 + (i + 0.5) * (BW / BARS); const bar = new THREE.Mesh(new THREE.CylinderGeometry(WIRE * 0.85, WIRE * 0.85, BD - 0.6, 8), wireMat); bar.rotation.x = Math.PI / 2; bar.position.set(x, 0, 0); bar.castShadow = true; blade.add(bar); }
-  const cross = new THREE.Mesh(new THREE.CylinderGeometry(WIRE * 0.8, WIRE * 0.8, BW - 1.2, 8), wireMat); cross.rotation.z = Math.PI / 2; cross.position.set(0, 0.05, BD * 0.22); blade.add(cross);
+  /* 真猫砂铲是簸箕形，不是一块平网：平底 → 后半段起翘成后壁，两侧起壁，只有前沿是开口的平刃。
+     钢丝顺着「底 + 后壁」一根根弯上去（缝隙仍沿 x 方向，筛砂逻辑不变）。 */
+  const NZ = 18;
+  for (let i = 0; i < BARS; i++) {
+    const x = -BW / 2 + (i + 0.5) * (BW / BARS), wp = [];
+    for (let k = 0; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; wp.push(new THREE.Vector3(x, bladeFloorY(z), z)); }
+    const w = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wp), 26, WIRE * 0.85, 6, false), wireMat);
+    w.castShadow = true; blade.add(w);
+  }
+  // 外框：前沿平刃 → 右侧上沿一路爬高 → 后壁顶 → 左侧下来，一根闭合钢丝
+  const pts = [];
+  pts.push(new THREE.Vector3(-BW / 2 + 1.1, 0, -BD / 2), new THREE.Vector3(BW / 2 - 1.1, 0, -BD / 2));
+  for (let k = 1; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; pts.push(new THREE.Vector3(BW / 2, bladeSideY(z), z)); }
+  pts.push(new THREE.Vector3(BW / 2 - 1.1, BACK_H, BD / 2), new THREE.Vector3(-BW / 2 + 1.1, BACK_H, BD / 2));
+  for (let k = NZ; k >= 1; k--) { const z = -BD / 2 + BD * k / NZ; pts.push(new THREE.Vector3(-BW / 2, bladeSideY(z), z)); }
+  const frame = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 190, WIRE, 8, true), wireMat); frame.castShadow = true; blade.add(frame);
+  // 侧壁竖丝：底边 → 侧上沿
+  for (const sx of [-BW / 2, BW / 2]) for (let k = 1; k <= 5; k++) {
+    const z = -BD / 2 + BD * k / 6, y0 = bladeFloorY(z), y1 = bladeSideY(z);
+    if (y1 - y0 < 0.35) continue;
+    const s = rodBetween(new THREE.Vector3(sx, y0, z), new THREE.Vector3(sx, y1, z), WIRE * 0.7, WIRE * 0.7, wireMat, 6); s.castShadow = true; blade.add(s);
+  }
+  // 后壁横丝
+  for (const yy of [BACK_H * 0.42, BACK_H * 0.78]) {
+    const z = backZAtY(yy);
+    blade.add(rodBetween(new THREE.Vector3(-BW / 2, yy, z), new THREE.Vector3(BW / 2, yy, z), WIRE * 0.8, WIRE * 0.8, wireMat, 8));
+  }
   /* 杆：必须挂在 blade 上（挂 scoop 的话铲面一倾斜杆不跟着转，就脱开了），
      且用两点连接生成，端点对端点焊死，不靠手算 position+rotation 去凑。
-     抬到 ~45°：杆太平的话贴墙下铲时整根会从盆壁里穿出去。 */
-  const P0 = new THREE.Vector3(0, 0.12, BD / 2 - 0.5);   // 焊在铲面后沿上
-  const P1 = new THREE.Vector3(0, 2.6, BD / 2 + 2.2);    // 折弯处（金属→塑料握把）
-  const P2 = new THREE.Vector3(0, 8.4, BD / 2 + 7.4);    // 握把末端
+     从后壁顶接出去，抬到 ~45°：杆太平的话贴墙下铲时整根会从盆壁里穿出去。 */
+  const P0 = new THREE.Vector3(0, BACK_H - 0.35, BD / 2 - 0.35);  // 焊在后壁顶
+  const P1 = new THREE.Vector3(0, BACK_H + 2.2, BD / 2 + 2.0);    // 折弯处（金属→塑料握把）
+  const P2 = new THREE.Vector3(0, BACK_H + 7.5, BD / 2 + 6.8);    // 握把末端
   const neck = rodBetween(P0, P1, WIRE * 1.15, WIRE * 1.3, wireMat, 10); neck.castShadow = true; blade.add(neck);
   const grip = rodBetween(P1, P2, 0.62, 0.78, gripMat, 16); grip.castShadow = true; blade.add(grip);
   const dir = new THREE.Vector3().subVectors(P2, P1).normalize();
@@ -470,7 +496,8 @@ function scoopDig(dt) {
 // 防穿模兜底：后沿两角和整根杆，只要横向落在盆壁那圈环里，就必须高过翻边；
 // 差多少就把铲口抬多少（连 SC.floor 一起抬，不然会变成悬空削砂）。
 // 正常情况靠 SC.steep 立起来就够了，这里只兜角度不够的余量。
-const WALL_PROBES = [[-BW / 2, 0, BD / 2], [BW / 2, 0, BD / 2], [0, 0.12, BD / 2 - 0.5], [0, 2.6, BD / 2 + 2.2], [0, 5.5, BD / 2 + 4.8], [0, 8.4, BD / 2 + 7.4]];
+const WALL_PROBES = [[-BW / 2, BACK_H, BD / 2], [BW / 2, BACK_H, BD / 2], [-BW / 2, 0, FLAT_Z], [BW / 2, 0, FLAT_Z],
+  [0, BACK_H + 2.2, BD / 2 + 2.0], [0, BACK_H + 4.9, BD / 2 + 4.4], [0, BACK_H + 7.5, BD / 2 + 6.8]]; /* 后壁两角、底后两角、整根杆 */
 function wallClearLift(t) {
   const ct = Math.cos(t), st = Math.sin(t), cy = Math.cos(YAW), sy = Math.sin(YAW);
   let need = 0;
@@ -581,8 +608,11 @@ function updateHeld(dt) {
     q.vx += (lax - q.vx * grip) * dt; q.vz += (gz + laz - q.vz * grip) * dt;
     q.x += q.vx * dt; q.z += q.vz * dt;
     const limX = BW / 2 - c.r * 0.55, limZ = BD / 2 - c.r * 0.55; let off = false;
-    if (Math.abs(q.x) > limX) { if (Math.abs(q.vx) > 34) off = true; else { q.x = Math.sign(q.x) * limX; q.vx *= -0.35; } }
-    if (Math.abs(q.z) > limZ) { const front = q.z < 0; const blocked = front && SC.state === 'dig'; /* 铲砂时前面被砂堵着 */ if (!blocked && (Math.abs(q.vz) > (front ? 42 : 30) || (front ? t < -0.95 : t > 0.75))) off = true; else { q.z = Math.sign(q.z) * limZ; q.vz *= -0.3; } }
+    /* 簸箕形：两侧和后面都是壁，只有前沿是开口的 —— 侧面要甩得非常狠才翻得出去，后面翻不出去 */
+    if (Math.abs(q.x) > limX) { if (Math.abs(q.vx) > 52) off = true; else { q.x = Math.sign(q.x) * limX; q.vx *= -0.4; } }
+    if (q.z > limZ) { q.z = limZ; q.vz *= -0.35; }                       /* 后壁：挡住 */
+    else if (q.z < -limZ) { const blocked = SC.state === 'dig';          /* 铲砂时前面被砂堵着 */
+      if (!blocked && (Math.abs(q.vz) > 42 || t < -0.95)) off = true; else { q.z = -limZ; q.vz *= -0.3; } }
     c.holder.position.x = q.x; c.holder.position.z = q.z;
     c.holder.rotation.x -= q.vz * dt / Math.max(0.8, c.r); c.holder.rotation.z += q.vx * dt / Math.max(0.8, c.r); /* 滚动 */
     if (off) { /* 掉出去：转成世界坐标自由落体 */
