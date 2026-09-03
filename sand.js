@@ -151,6 +151,17 @@ function bury(x, z, type, depth) {
   const c = { type, x, z, r, mesh, buried: T.buried, y0: 0 };
   if (T.buried) { c.y0 = hs - depth - r * 0.9; brush(x, z, r * 2.6, 0.25 + depth * 0.35, (i, a) => { h[i] += a; }); }
   else { c.y0 = hs - r * 0.15; }
+  /* 尿往下渗：砂薄处大概率一路渗到盆底结成黏底饼，得铲到底反复刮才下来 */
+  if (type === 'urine' && litter.clumping) {
+    const pStick = Math.min(1, Math.max(0.25, (5.2 - hs) / 2.5));
+    if (c.y0 - c.r * 0.8 < 0.4 || Math.random() < pStick) {
+      c.stick = 4 + (c.r > 3 ? 2 : 0); c.wasStuck = true; c.y0 = c.r * 0.35; c.domeK = 0.45; /* 压扁贴底 */
+      const w = litter.wet; /* 结在底上的尿饼：湿砂色、压扁、贴着盆底 */
+      const cake = new THREE.Mesh(sandBall(r * 0.95, 0.5), new THREE.MeshStandardMaterial({ color: new THREE.Color(litter.color).multiply(new THREE.Color(w[0], w[1], w[2])).multiplyScalar(0.9), roughness: 0.75, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(1.2, 1.2) }));
+      cake.castShadow = true; mesh.add(cake); c.cake = cake;
+      stainAt(x, z, r * 1.5, 0.5);
+    }
+  }
   mesh.position.set(x, c.y0, z); mesh.rotation.y = Math.random() * 6.28;
   if (T.stain) stainAt(x, z, r * (T.buried ? 1.6 : 2.2), T.stain);
   clumps.push(c); dirty = true; return c;
@@ -161,7 +172,7 @@ function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clum
 function updateClumps() {
   for (const c of clumps) {
     const [gx, gy] = worldToGrid(c.x, c.z);
-    if (c.buried) { const rc = c.r / CELL; const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc)); for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * 0.85; const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } } }
+    if (c.buried) { const rc = c.r / CELL; const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc)); for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * (c.domeK || 0.85); const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } } }
     else { const hs = h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; c.mesh.position.y = hs - c.r * 0.15; }
   }
 }
@@ -248,6 +259,8 @@ const DIG_DEPTH = 2.4, DIG_RATE = 8, V_CAP = 2400;   // 铲入深度、速率、
 const wireMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.92, roughness: 0.22 });
 const gripMat = new THREE.MeshStandardMaterial({ color: 0x8e9299, roughness: 0.7 });
 let YAW = 0.55; const YAW_R = 0.55; /* 右手持：铲头朝左前，柄在右下；到盆右侧 1/4 换左手（镜像） */
+let hand = 1;                       /* +1 右手 / -1 左手，带回差，不从 YAW 反推（贴壁时 YAW 会转到 ±π/2、π） */
+const angLerp = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t; /* 走最短弧，跨 ±π 不会绕远路 */
 const scoop = new THREE.Group(); scoop.rotation.y = YAW; scene.add(scoop);
 const gridToWorld = (gx, gy) => [-TRAY_W / 2 + gx * CELL, row0z < 0 ? -TRAY_D / 2 + gy * CELL : TRAY_D / 2 - gy * CELL];
 const toLocal = (wx, wz) => { const dx = wx - SC.px, dz = wz - SC.pz; return [dx * Math.cos(YAW) - dz * Math.sin(YAW), dx * Math.sin(YAW) + dz * Math.cos(YAW)]; };
@@ -284,6 +297,16 @@ function spawnLeak(n, amtEach) {
     pAmt[i] = amtEach; pAlive[i] = 1;
   }
 }
+// 刮黏底尿块：碎屑从铲刃前沿溅开（顺着刮的方向）
+function scrapeBurst(c) {
+  const sp = Math.hypot(SC.vx, SC.vz) || 1, ux = SC.vx / sp, uz = SC.vz / sp;
+  for (let k = 0; k < 14; k++) {
+    const i = pHead; pHead = (pHead + 1) % PMAX;
+    pPos[i * 3] = c.x + (Math.random() - 0.5) * c.r * 1.6; pPos[i * 3 + 1] = c.y0 + c.r * 0.5 + Math.random(); pPos[i * 3 + 2] = c.z + (Math.random() - 0.5) * c.r * 1.6;
+    pVel[i * 3] = ux * (6 + Math.random() * 10) + (Math.random() - 0.5) * 7; pVel[i * 3 + 1] = 4 + Math.random() * 7; pVel[i * 3 + 2] = uz * (6 + Math.random() * 10) + (Math.random() - 0.5) * 7;
+    pAmt[i] = 0.05; pAlive[i] = 1;
+  }
+}
 function updateParticles(dt) {
   let any = false;
   for (let i = 0; i < PMAX; i++) {
@@ -304,14 +327,32 @@ function scoopDig(dt) {
     const inner = new Set(cells); const ring = bladeCells(1.4).filter(i => !inner.has(i));
     const per = removed * 0.22 / Math.max(1, ring.length); for (const i of ring) h[i] += per;
   }
+  // 黏在盆底的尿块：铲刃贴到底 + 横向拉过去才算刮一下，要刮好几下才松
+  for (const c of clumps) {
+    if (!c.stick) continue;
+    const [lx, lz] = toLocal(c.x, c.z);
+    c.scrapeCd = Math.max(0, (c.scrapeCd || 0) - dt);
+    if (Math.abs(lx) > BW / 2 + 0.5 || Math.abs(lz) > BD / 2 + 0.5) continue;
+    const atFloor = SC.floor <= c.y0 + c.r * 0.3;      /* 铲刃真的探到饼底那一层 */
+    const speed = Math.hypot(SC.vx, SC.vz);
+    if (!atFloor) { if (!c.scrapeCd) { DISP.msg = '砂还没清干净，铲不到底'; c.scrapeCd = 0.5; } continue; }
+    if (speed < 14) { if (!c.scrapeCd) { DISP.msg = '黏死在盆底了，得使劲刮'; c.scrapeCd = 0.5; } continue; }
+    if (c.scrapeCd > 0) continue;
+    c.stick--; c.scrapeCd = 0.3; SC.shake = Math.min(1, SC.shake + 0.4);
+    scrapeBurst(c);
+    brush(c.x, c.z, c.r * 1.3, 0.16, (i, a) => { floorTint[i] = Math.max(0, floorTint[i] - a); }); /* 刮一下，底上的黄印淡一点 */
+    if (c.cake) c.cake.scale.multiplyScalar(0.94);
+    if (c.stick <= 0) { c.stick = 0; DISP.msg = '刮松了！可以端起来了'; if (c.cake) c.cake.material.color.multiplyScalar(1.06); }
+    else DISP.msg = `刮下来一点，还黏着（再刮 ${c.stick} 下）`;
+  }
   if (SC.digCaught) return; /* 一次铲入最多端起一坨；端着可以再铲下一坨 */
   let best = null, bd = 1e9;
-  for (const c of clumps) { const [lx, lz] = toLocal(c.x, c.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; if (!under) continue; const d = lx * lx + lz * lz; if (d < bd) { bd = d; best = c; } }
+  for (const c of clumps) { if (c.stick > 0) continue; const [lx, lz] = toLocal(c.x, c.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; if (!under) continue; const d = lx * lx + lz * lz; if (d < bd) { bd = d; best = c; } }
   if (best) {
     const c = best; const [lx, lz] = toLocal(c.x, c.z); const k = clumps.indexOf(c);
     SC.digCaught = true; clumps.splice(k, 1); clumpGroup.remove(c.mesh);
     const T = POOP_TYPES[c.type]; const holder = new THREE.Group();
-    if (c.buried && litter.clumping) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
+    if (c.buried && litter.clumping && !c.wasStuck) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
     else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
     else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
     holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), lz); blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
@@ -325,7 +366,15 @@ function updateScoop(dt) {
   const tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
   const nx = SC.px + (tx - SC.px) * Math.min(1, dt * 18), nz = SC.pz + (tz - SC.pz) * Math.min(1, dt * 18);
   SC.vx = (nx - SC.px) / Math.max(dt, 1e-3); SC.vz = (nz - SC.pz) / Math.max(dt, 1e-3); SC.px = nx; SC.pz = nz;
-  const wantLeft = SC.px > TRAY_W / 4 - (YAW < 0 ? 4 : 0); /* 带 4 的回差，别在线上抖 */ YAW += ((wantLeft ? -YAW_R : YAW_R) - YAW) * Math.min(1, dt * 7); scoop.rotation.y = YAW;
+  const outsideAll = Math.abs(SC.px) > TRAY_W / 2 + WALL + 4 || Math.abs(SC.pz) > TRAY_D / 2 + WALL + 4; /* 整把铲在盆外的地上 */
+  // 手：默认右手斜握；到盆右侧 1/4 换左手（带 4 的回差，别在线上抖）
+  if (hand > 0 && SC.px > TRAY_W / 4) hand = -1; else if (hand < 0 && SC.px < TRAY_W / 4 - 4) hand = 1;
+  // 贴壁：离哪面壁近，铲头就转过去贴着那面壁下铲（角落取最近的一面；铲头方向 = -(sinYAW, cosYAW)）
+  let wYaw = 0, wD = 1e9;
+  for (const [d, y] of [[TRAY_W / 2 - SC.px, -Math.PI / 2], [TRAY_W / 2 + SC.px, Math.PI / 2], [TRAY_D / 2 - SC.pz, Math.PI], [TRAY_D / 2 + SC.pz, 0]]) if (d < wD) { wD = d; wYaw = y; }
+  const near = outsideAll ? 0 : Math.min(1, Math.max(0, (BD * 0.95 - Math.max(0, wD)) / (BD * 0.75)));
+  const yawTarget = angLerp(hand * YAW_R, wYaw + hand * 0.3, near); /* 贴上了也留一点手腕角度，不是垂直机器 */
+  YAW = angLerp(YAW, yawTarget, Math.min(1, dt * 7)); scoop.rotation.y = YAW;
   const speed = Math.hypot(SC.vx, SC.vz); SC.shake = SC.shake * 0.85 + Math.min(1, speed / 45) * 0.15;
   const [gx, gy] = worldToGrid(SC.px, SC.pz);
   // 铲面四角任一角压到盆壁或盆外 → 抬到盆沿以上，不能铲（碰撞）
@@ -335,7 +384,6 @@ function updateScoop(dt) {
   const fx = SC.px + (-BD / 2 + 1.2) * Math.sin(YAW), fz = SC.pz + (-BD / 2 + 1.2) * Math.cos(YAW);
   const inside = Math.abs(fx) <= TRAY_W / 2 - 0.6 && Math.abs(fz) <= TRAY_D / 2 - 0.6;
   SC.steep = Math.min(1, overhang / (BD * 0.8));
-  const outsideAll = Math.abs(SC.px) > TRAY_W / 2 + WALL + 4 || Math.abs(SC.pz) > TRAY_D / 2 + WALL + 4; /* 整把铲在盆外的地上 */
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && outsideAll) { /* 地上铲：贴地，捡散落的 */
     SC.state = 'floor'; SC.y += (0.9 - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.12 - SC.tilt) * Math.min(1, dt * 8);
