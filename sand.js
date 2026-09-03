@@ -314,7 +314,7 @@ function scoopDig(dt) {
     if (c.buried && litter.clumping) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
     else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
     else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
-    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), lz); blade.add(holder); c.holder = holder; SC.held.push(c);
+    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), lz); blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
     SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
   }
 }
@@ -360,7 +360,46 @@ const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32), new THREE.MeshPh
   const rim = new THREE.Mesh(new THREE.TorusGeometry(4.6, 0.55, 12, 40), cer); rim.rotation.x = Math.PI / 2; rim.position.y = 9.9; rim.castShadow = true; toilet.add(rim);
   water.rotation.x = -Math.PI / 2; water.position.y = 7.4; toilet.add(water);
   const tank = new THREE.Mesh(new THREE.BoxGeometry(6.5, 7, 2.6), cer); tank.position.set(0, 12.5, -4.2); tank.castShadow = true; toilet.add(tank); }
-const DISP = { bag: 0, flushed: 0, clogged: 0, flushT: 0, clogT: 0, msg: '' };
+const DISP = { bag: 0, flushed: 0, clogged: 0, flushT: 0, clogT: 0, msg: '', dropped: 0 };
+// ---------- 铲上的屎会滚、会掉 ----------
+// 铲面倾角 + 铲子加速度的假力推着它在条上滚；撞框边弹一下；速度太大或倾太多就翻过框掉出去
+const fallen = []; const tmpW = new THREE.Vector3();
+let prevVx = 0, prevVz = 0;
+function updateHeld(dt) {
+  const ax = (SC.vx - prevVx) / Math.max(dt, 1e-3), az = (SC.vz - prevVz) / Math.max(dt, 1e-3); prevVx = SC.vx; prevVz = SC.vz;
+  const lax = -(ax * Math.cos(YAW) - az * Math.sin(YAW)) * 0.35, laz = -(ax * Math.sin(YAW) + az * Math.cos(YAW)) * 0.35; /* 假力：铲子往前加速，屎往后滑 */
+  const t = blade.rotation.x; const gz = 60 * Math.sin(t); /* 铲面倾角带来的滑动加速度（+z 是柄那边） */
+  for (let k = SC.held.length - 1; k >= 0; k--) {
+    const c = SC.held[k], q = c.p; if (!q) continue;
+    const grip = c.buried && litter.clumping ? 3.5 : 2.0; /* 结团砂壳粗糙，滚得慢；光屎滚得快 */
+    q.vx += (lax - q.vx * grip) * dt; q.vz += (gz + laz - q.vz * grip) * dt;
+    q.x += q.vx * dt; q.z += q.vz * dt;
+    const limX = BW / 2 - c.r * 0.55, limZ = BD / 2 - c.r * 0.55; let off = false;
+    if (Math.abs(q.x) > limX) { if (Math.abs(q.vx) > 22 || Math.abs(t) > 0.5) off = true; else { q.x = Math.sign(q.x) * limX; q.vx *= -0.35; } }
+    if (Math.abs(q.z) > limZ) { const front = q.z < 0; if (Math.abs(q.vz) > (front ? 14 : 22) || Math.abs(t) > (front ? 0.32 : 0.5)) off = true; else { q.z = Math.sign(q.z) * limZ; q.vz *= -0.35; } }
+    c.holder.position.x = q.x; c.holder.position.z = q.z;
+    c.holder.rotation.x -= q.vz * dt / Math.max(0.8, c.r); c.holder.rotation.z += q.vx * dt / Math.max(0.8, c.r); /* 滚动 */
+    if (off) { /* 掉出去：转成世界坐标自由落体 */
+      tmpW.set(q.x, c.holder.position.y, q.z); blade.localToWorld(tmpW);
+      const wv = new THREE.Vector3(q.vx, 0, q.vz).applyAxisAngle(new THREE.Vector3(0, 1, 0), YAW);
+      blade.remove(c.holder); scene.add(c.holder); c.holder.position.copy(tmpW);
+      fallen.push({ c, v: wv.add(new THREE.Vector3(SC.vx * 0.3, 1.5, SC.vz * 0.3)) }); SC.held.splice(k, 1); c.p = null; DISP.msg = '掉了一坨';
+    }
+  }
+}
+function updateFallen(dt) {
+  for (let k = fallen.length - 1; k >= 0; k--) {
+    const f = fallen[k], m = f.c.holder; f.v.y -= 60 * dt; m.position.addScaledVector(f.v, dt); m.rotation.x += f.v.z * dt * 0.5; m.rotation.z -= f.v.x * dt * 0.5;
+    const inside = Math.abs(m.position.x) <= TRAY_W / 2 - 1 && Math.abs(m.position.z) <= TRAY_D / 2 - 1;
+    let ground = 0; if (inside) { const [gx, gy] = worldToGrid(m.position.x, m.position.z); ground = h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; }
+    else if (Math.abs(m.position.x) <= TRAY_W / 2 + WALL + 1 && Math.abs(m.position.z) <= TRAY_D / 2 + WALL + 1) ground = WALL_H; /* 搁在盆沿上 */
+    if (m.position.y <= ground + f.c.r * 0.3) {
+      fallen.splice(k, 1); const c = f.c; scene.remove(m);
+      if (inside) { /* 回到砂上：变成一坨露在外面的 */ c.buried = false; c.x = m.position.x; c.z = m.position.z; c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); if (c.ball) { c.mesh.position.y = 0; } clumpGroup.add(m); m.position.set(c.x, ground, c.z); m.rotation.set(0, 0, 0); c.mesh = m; c.holder = null; clumps.push(c); DISP.msg = '掉回砂上了'; }
+      else { m.position.y = ground + c.r * 0.3; scene.add(m); DISP.dropped++; DISP.msg = '掉到盆外了'; }
+    }
+  }
+}
 function dumpTo(where) {
   const n = SC.held.length, v = SC.V;
   for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0;
@@ -496,11 +535,11 @@ function frame(now) {
   slump(tool === 'lift' ? 4 : 2); if (tool !== 'lift') settle(0.03);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
-  updateLift(dt); updateRolls(dt); updateScoop(dt); updateParticles(dt); updateDispose(dt);
+  updateLift(dt); updateRolls(dt); updateScoop(dt); updateHeld(dt); updateFallen(dt); updateParticles(dt); updateDispose(dt);
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
-  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${DISP.bag} 坨 · 冲走 ${DISP.flushed} · 堵 ${DISP.clogged} 次 · 浪费砂 ${Math.round(SC.wasted)}${DISP.msg ? ' · ' + DISP.msg : ''}`; frames = 0; fpsT = 0; }
+  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${DISP.bag} 坨 · 冲走 ${DISP.flushed} · 堵 ${DISP.clogged} 次 · 浪费砂 ${Math.round(SC.wasted)} · 掉地上 ${DISP.dropped}${DISP.msg ? ' · ' + DISP.msg : ''}`; frames = 0; fpsT = 0; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
