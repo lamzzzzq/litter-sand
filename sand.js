@@ -26,7 +26,7 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2a2118);
 const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 500);
-camera.position.set(0, 58, 34);
+camera.position.set(0, 60, 40);
 const controls = new OrbitControls(camera, cv);
 controls.target.set(0, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
 controls.minDistance = 25; controls.maxDistance = 120; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
@@ -41,18 +41,35 @@ scene.add(sun);
 scene.add(new THREE.HemisphereLight(0xfff5e6, 0x4a3a2a, 0.9));
 const fill = new THREE.DirectionalLight(0xcfe3ff, 0.5); fill.position.set(30, 30, -20); scene.add(fill);
 
-// 盆
-const trayMat = new THREE.MeshStandardMaterial({ color: 0x7a8aa0, roughness: 0.6, metalness: 0.05 });
-const floor = new THREE.Mesh(new THREE.BoxGeometry(TRAY_W + WALL * 2, 1, TRAY_D + WALL * 2), trayMat); floor.position.y = -0.5; floor.receiveShadow = true; scene.add(floor);
-for (const [x, z, w, d] of [[0, -TRAY_D / 2 - WALL / 2, TRAY_W + WALL * 2, WALL], [0, TRAY_D / 2 + WALL / 2, TRAY_W + WALL * 2, WALL], [-TRAY_W / 2 - WALL / 2, 0, WALL, TRAY_D], [TRAY_W / 2 + WALL / 2, 0, WALL, TRAY_D]]) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, WALL_H, d), trayMat); m.position.set(x, WALL_H / 2, z); m.castShadow = true; m.receiveShadow = true; scene.add(m);
+// 猫砂盆：圆角矩形塑料盆，壁略外倾，顶上一圈翻边。ExtrudeGeometry 带倒角
+function roundRectShape(w, d, r) { const sh = new THREE.Shape(); sh.moveTo(-w / 2 + r, -d / 2); sh.lineTo(w / 2 - r, -d / 2); sh.quadraticCurveTo(w / 2, -d / 2, w / 2, -d / 2 + r); sh.lineTo(w / 2, d / 2 - r); sh.quadraticCurveTo(w / 2, d / 2, w / 2 - r, d / 2); sh.lineTo(-w / 2 + r, d / 2); sh.quadraticCurveTo(-w / 2, d / 2, -w / 2, d / 2 - r); sh.lineTo(-w / 2, -d / 2 + r); sh.quadraticCurveTo(-w / 2, -d / 2, -w / 2 + r, -d / 2); return sh; }
+const plastic = new THREE.MeshPhysicalMaterial({ color: 0x9fb3c8, roughness: 0.45, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.4 });
+const plasticIn = new THREE.MeshPhysicalMaterial({ color: 0x8ea3b8, roughness: 0.5, metalness: 0, clearcoat: 0.2, side: THREE.BackSide });
+{
+  const R = 5;
+  const outer = roundRectShape(TRAY_W + WALL * 2 + 2, TRAY_D + WALL * 2 + 2, R + WALL);
+  const holePath = roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R);
+  outer.holes.push(new THREE.Path(holePath.getPoints(24)));
+  const wall = new THREE.Mesh(new THREE.ExtrudeGeometry(outer, { depth: WALL_H, bevelEnabled: true, bevelThickness: 0.5, bevelSize: 0.5, bevelSegments: 3, curveSegments: 24 }), plastic);
+  wall.rotation.x = -Math.PI / 2; wall.position.y = 0; wall.castShadow = true; wall.receiveShadow = true; scene.add(wall);
+  // 翻边
+  const lipOuter = roundRectShape(TRAY_W + WALL * 2 + 6, TRAY_D + WALL * 2 + 6, R + WALL + 2);
+  lipOuter.holes.push(new THREE.Path(roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R).getPoints(24)));
+  const lip = new THREE.Mesh(new THREE.ExtrudeGeometry(lipOuter, { depth: 1.1, bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.35, bevelSegments: 2, curveSegments: 24 }), plastic);
+  lip.rotation.x = -Math.PI / 2; lip.position.y = WALL_H - 0.2; lip.castShadow = true; lip.receiveShadow = true; scene.add(lip);
+  // 盆底
+  const floorM = new THREE.Mesh(new THREE.ExtrudeGeometry(roundRectShape(TRAY_W + WALL * 2 + 2, TRAY_D + WALL * 2 + 2, R + WALL), { depth: 1.2, bevelEnabled: false }), plastic);
+  floorM.rotation.x = -Math.PI / 2; floorM.position.y = -1.2; floorM.receiveShadow = true; scene.add(floorM);
+  // 内壁（反面，压暗）
+  const inner = new THREE.Mesh(new THREE.ExtrudeGeometry(roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R), { depth: WALL_H, bevelEnabled: false, curveSegments: 24 }), plasticIn);
+  inner.rotation.x = -Math.PI / 2; inner.receiveShadow = true; scene.add(inner);
 }
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x3b3128, roughness: 1 })); ground.rotation.x = -Math.PI / 2; ground.position.y = -1; ground.receiveShadow = true; scene.add(ground);
 
 // ---------- 高度场 ----------
-const h = new Float32Array(N * N), tmp = new Float32Array(N * N);
+const h = new Float32Array(N * N), tmp = new Float32Array(N * N), jit = new Float32Array(N * N);
 const gi = (ix, iy) => iy * N + ix;
-function resetSand() { for (let i = 0; i < h.length; i++) h[i] = BASE_H + (Math.random() - 0.5) * 0.12; dirty = true; }
+function resetSand() { for (let i = 0; i < h.length; i++) { h[i] = BASE_H + (Math.random() - 0.5) * 0.12; jit[i] = 0.9 + 0.2 * Math.random(); } if (typeof clearClumps === 'function') clearClumps(); dirty = true; }
 
 // 颗粒法线贴图：噪声高度 → 法线，按砂种粗细缩放
 function grainNormalTexture(scale) {
@@ -78,6 +95,32 @@ const row0z = pos.getZ(0);
 const sandMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: litter.rough, metalness: 0, normalMap: grainNormalTexture(litter.grain), normalScale: new THREE.Vector2(0.6, 0.6) });
 const sand = new THREE.Mesh(sandGeo, sandMat); sand.castShadow = true; sand.receiveShadow = true; scene.add(sand);
 let dirty = true;
+
+// ---------- 结块（屎 + 砂壳）：埋在砂里，挖到就露出来 ----------
+const clumps = [];
+const clumpGroup = new THREE.Group(); scene.add(clumpGroup);
+function lumpyGeo(r) { const g = new THREE.IcosahedronGeometry(r, 4); const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.14; p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.8, p.getZ(i) * k); } g.computeVertexNormals(); return g; }
+const poopMat = new THREE.MeshStandardMaterial({ color: 0x5a3418, roughness: 0.75 });
+function makeClump(r) {
+  const g = new THREE.Group();
+  const shellMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(litter.color).multiplyScalar(0.72), roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(1.2, 1.2) });
+  const shell = new THREE.Mesh(lumpyGeo(r), shellMat); shell.castShadow = true; shell.receiveShadow = true; g.add(shell);
+  // 露出砂壳的屎
+  for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(r * (0.42 - i * 0.08), 16, 12), poopMat); b.position.set((Math.random() - 0.5) * r * 0.9, r * (0.25 + i * 0.28), (Math.random() - 0.5) * r * 0.9); b.scale.y = 0.8; b.castShadow = true; g.add(b); }
+  return g;
+}
+function bury(x, z, depth) {
+  const r = 1.6 + Math.random() * 1.2;
+  const m = makeClump(r); const [gx, gy] = worldToGrid(x, z); const hs = h[gi(Math.round(gx), Math.round(gy))];
+  const y0 = hs - depth - r * 1.15; // 最高的那颗屎也埋在砂面以下 depth 处
+  m.position.set(x, y0, z); m.rotation.y = Math.random() * 6.28; clumpGroup.add(m);
+  clumps.push({ mesh: m, x, z, r, y0 });
+  brush(x, z, r * 2.6, 0.28 + depth * 0.35, (i, a) => { h[i] += a; }); // 鼓包：找的破绽 [调]
+}
+function buryRandom(n = 3) { for (let k = 0; k < n; k++) bury((Math.random() - 0.5) * (TRAY_W - 12), (Math.random() - 0.5) * (TRAY_D - 12), 0.4 + Math.random() * 1.2); dirty = true; }
+function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; }
+function updateClumps() { for (const c of clumps) { const [gx, gy] = worldToGrid(c.x, c.z); const hs = h[gi(Math.round(gx), Math.round(gy))]; c.mesh.position.y = Math.min(c.y0, hs - c.r * 0.9); } } // 底下的砂被挖走就往下沉
+
 function pushGeometry() {
   for (let i = 0; i < N * N; i++) pos.setY(i, h[i]);
   pos.needsUpdate = true; sandGeo.computeVertexNormals(); sandGeo.computeBoundingSphere();
@@ -86,16 +129,21 @@ function pushGeometry() {
 function worldToGrid(x, z) { const ix = (x + TRAY_W / 2) / TRAY_W * (N - 1); let iy = (z + TRAY_D / 2) / TRAY_D * (N - 1); if (row0z > 0) iy = (N - 1) - iy; return [ix, iy]; }
 
 // ---------- 砂的物理 ----------
-// 休止角坍落：相邻高差超过 tan(角)·格宽 的部分，按 slumpK 往低处流。每帧跑 2 遍。[调]
+// 休止角坍落：八邻居（对角线距离 √2 格），相邻高差超过 tan(角)·距离 的部分按 slumpK 往低处流，带一点随机让堆变圆。每帧 2 遍。[调]
+const NB = [[1, 0, 1], [0, 1, 1], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2]];
 function slump(iter = 2) {
-  const T = Math.tan(litter.talus * Math.PI / 180) * CELL, k = litter.slumpK;
+  const T0 = Math.tan(litter.talus * Math.PI / 180) * CELL, k = litter.slumpK;
   let moved = 0;
   for (let it = 0; it < iter; it++) {
     tmp.fill(0);
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
       const i = gi(x, y), hi = h[i];
-      if (x < N - 1) { const j = i + 1, d = hi - h[j]; if (d > T) { const m = (d - T) * k * 0.5; tmp[i] -= m; tmp[j] += m; } else if (d < -T) { const m = (-d - T) * k * 0.5; tmp[i] += m; tmp[j] -= m; } }
-      if (y < N - 1) { const j = i + N, d = hi - h[j]; if (d > T) { const m = (d - T) * k * 0.5; tmp[i] -= m; tmp[j] += m; } else if (d < -T) { const m = (-d - T) * k * 0.5; tmp[i] += m; tmp[j] -= m; } }
+      for (const [dx, dy, dist] of NB) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || nx >= N || ny >= N) continue;
+        const j = gi(nx, ny), T = T0 * dist * jit[i], d = hi - h[j];
+        if (d > T) { const m = (d - T) * k * 0.25 / dist; tmp[i] -= m; tmp[j] += m; }
+        else if (d < -T) { const m = (-d - T) * k * 0.25 / dist; tmp[i] += m; tmp[j] -= m; }
+      }
     }
     for (let i = 0; i < h.length; i++) { if (tmp[i] !== 0) { h[i] += tmp[i]; moved += Math.abs(tmp[i]); if (h[i] < 0) h[i] = 0; } }
     if (moved < 1e-4) break;
@@ -115,7 +163,7 @@ function press(cx, cz, r, dt) {
   brush(cx, cz, r, 9 * dt, (i, a) => { const take = Math.min(h[i], a); h[i] -= take; removed += take; });
   if (removed > 0) { const ring = []; brush(cx, cz, r * 1.9, 1, (i, w, x, y) => { const d = Math.hypot(x - worldToGrid(cx, cz)[0], y - worldToGrid(cx, cz)[1]) * CELL; if (d > r * 0.85) ring.push(i); }); const per = removed * 0.4 / Math.max(1, ring.length); for (const i of ring) h[i] += per; }
 }
-function pour(cx, cz, r, dt) { brush(cx, cz, r * 0.8, 7 * dt, (i, a) => { h[i] += a; }); }
+function pour(cx, cz, r, dt) { const jx = (Math.random() - 0.5) * r * 0.6, jz = (Math.random() - 0.5) * r * 0.6; brush(cx + jx, cz + jz, r * 0.7, 9 * dt, (i, a) => { h[i] += a * (0.8 + 0.4 * Math.random()); }); }
 function smooth(cx, cz, r, dt) {
   brush(cx, cz, r, Math.min(1, 6 * dt), (i, a, x, y) => { if (x <= 0 || y <= 0 || x >= N - 1 || y >= N - 1) return; const avg = (h[i - 1] + h[i + 1] + h[i - N] + h[i + N]) * 0.25; h[i] += (avg - h[i]) * a; });
 }
@@ -143,10 +191,11 @@ const ringGeo = new THREE.RingGeometry(0.9, 1, 48); ringGeo.rotateX(-Math.PI / 2
 cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false })); cursor.renderOrder = 10; scene.add(cursor);
 
 // UI
-document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; });
+document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; for (const c of clumps) { const sh = c.mesh.children[0]; sh.material.normalMap = sandMat.normalMap; sh.material.color.set(litter.color).multiplyScalar(0.72); sh.material.needsUpdate = true; } });
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
-document.getElementById('reset').onclick = resetSand;
+document.getElementById('reset').onclick = () => { resetSand(); buryRandom(3); };
+document.getElementById('bury').onclick = () => { buryRandom(1); };
 document.getElementById('flat').onclick = flattenAll;
 window.addEventListener('keydown', e => { if (e.shiftKey) tool = 'pour'; });
 window.addEventListener('keyup', e => { if (!e.shiftKey && tool === 'pour' && document.querySelector('[data-tool].on').dataset.tool !== 'pour') tool = document.querySelector('[data-tool].on').dataset.tool; });
@@ -155,14 +204,15 @@ function resize() { const w = innerWidth, hh = innerHeight; renderer.setSize(w, 
 addEventListener('resize', resize); resize();
 
 // ---------- 主循环 ----------
-resetSand();
+resetSand(); buryRandom(3);
 let last = performance.now(), fpsT = 0, frames = 0;
-window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls };
+window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryRandom };
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit)) { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
   slump(2);
   if (dirty) { pushGeometry(); dirty = false; }
+  updateClumps();
   if (hit) { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
   frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · ${N}×${N}`; frames = 0; fpsT = 0; }
