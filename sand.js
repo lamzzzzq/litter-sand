@@ -112,14 +112,21 @@ function makeClump(r) {
 function bury(x, z, depth) {
   const r = 1.6 + Math.random() * 1.2;
   const m = makeClump(r); const [gx, gy] = worldToGrid(x, z); const hs = h[gi(Math.round(gx), Math.round(gy))];
-  const y0 = hs - depth - r * 1.15; // 最高的那颗屎也埋在砂面以下 depth 处
+  const y0 = hs - depth - r * 0.9; // 壳顶在砂面以下 depth 处
   m.position.set(x, y0, z); m.rotation.y = Math.random() * 6.28; clumpGroup.add(m);
   clumps.push({ mesh: m, x, z, r, y0 });
   brush(x, z, r * 2.6, 0.28 + depth * 0.35, (i, a) => { h[i] += a; }); // 鼓包：找的破绽 [调]
 }
-function buryRandom(n = 3) { for (let k = 0; k < n; k++) bury((Math.random() - 0.5) * (TRAY_W - 12), (Math.random() - 0.5) * (TRAY_D - 12), 0.4 + Math.random() * 1.2); dirty = true; }
+function buryRandom(n = 3) { for (let k = 0; k < n; k++) bury((Math.random() - 0.5) * (TRAY_W - 12), (Math.random() - 0.5) * (TRAY_D - 12), 0.3 + Math.random() * 0.7); dirty = true; }
 function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; }
-function updateClumps() { for (const c of clumps) { const [gx, gy] = worldToGrid(c.x, c.z); const hs = h[gi(Math.round(gx), Math.round(gy))]; c.mesh.position.y = Math.min(c.y0, hs - c.r * 0.9); } } // 底下的砂被挖走就往下沉
+// 结块是实心的：它占的地方砂挖不走。每帧把它上方的砂面钳在「壳」的穹顶之上，挖到这层就停，屎从壳里冒出来
+function updateClumps() {
+  for (const c of clumps) {
+    const [gx, gy] = worldToGrid(c.x, c.z); const rc = c.r / CELL;
+    const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * 0.85; const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } }
+  }
+}
 
 function pushGeometry() {
   for (let i = 0; i < N * N; i++) pos.setY(i, h[i]);
@@ -160,7 +167,7 @@ function brush(cx, cz, r, amt, fn) {
 // 指压 / 铲刃：压下去的砂 40% 推到外圈成脊，其余算被手带走（消失）[调]
 function press(cx, cz, r, dt) {
   let removed = 0;
-  brush(cx, cz, r, 9 * dt, (i, a) => { const take = Math.min(h[i], a); h[i] -= take; removed += take; });
+  brush(cx, cz, r * 1.3, 8 * dt, (i, a) => { const take = Math.min(h[i], a); h[i] -= take; removed += take; }); // 指压面比光标环略宽，坑口更开
   if (removed > 0) { const ring = []; brush(cx, cz, r * 1.9, 1, (i, w, x, y) => { const d = Math.hypot(x - worldToGrid(cx, cz)[0], y - worldToGrid(cx, cz)[1]) * CELL; if (d > r * 0.85) ring.push(i); }); const per = removed * 0.4 / Math.max(1, ring.length); for (const i of ring) h[i] += per; }
 }
 function pour(cx, cz, r, dt) { const jx = (Math.random() - 0.5) * r * 0.6, jz = (Math.random() - 0.5) * r * 0.6; brush(cx + jx, cz + jz, r * 0.7, 9 * dt, (i, a) => { h[i] += a * (0.8 + 0.4 * Math.random()); }); }
