@@ -1,0 +1,5 @@
+shots/
+.vercel/
+.DS_Store
+.gstack/
+.workbuddy/
