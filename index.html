@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>猫砂盆 · 砂的物理</title>
-<link rel="stylesheet" href="style.css?v=0.3.1">
+<link rel="stylesheet" href="style.css?v=0.4.0">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
 </head>
 <body>
 <div id="ui">
   <div class="row">
-    <b>猫砂盆 · 砂</b><span class="sub">v0.1 · v0.3 · 钢丝铲漏砂</span>
+    <b>猫砂盆 · 砂</b><span class="sub">v0.1 · v0.4 · 屎的种类×猫的习惯</span>
     <span id="fps" class="sub"></span>
   </div>
   <div class="row">
@@ -22,15 +22,18 @@
     <button data-litter="pine">松木砂</button>
   </div>
   <div class="row">
+    <span class="lbl">猫</span><select id="cat"><option value="granny">阿婆（老猫：尿团多、偶尔不埋）</option><option value="orange">小橘（贪吃：稀屎多）</option><option value="coal">煤球（洁癖：埋得深）</option><option value="kitten">幼猫（小坨、没埋、可能有虫）</option><option value="stray">流浪猫（全不埋）</option></select>
+  </div>
+  <div class="row">
     <span class="lbl">手</span>
     <button data-tool="scoop" class="on">猫砂铲</button><button data-tool="press">指压</button>
     <button data-tool="pour">倒砂</button>
     <button data-tool="smooth">抹平</button>
     <span class="lbl">大小</span><input id="size" type="range" min="1" max="8" step="0.5" value="3">
   </div>
-  <div class="row hint">铲：按住拖 = 铲入砂里 · 松开 = 端起（砂从缝里漏，晃得快漏得快，屎卡在条上）· 点右边桶 = 倒进去 · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">再埋一坨</button></div>
+  <div class="row hint">铲：按住拖 = 铲入砂里 · 松开 = 端起（砂从缝里漏，晃得快漏得快，屎卡在条上）· 点右边桶 = 倒进去 · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">这只猫再来一坨</button></div>
 </div>
 <canvas id="cv"></canvas>
-<script type="module" src="sand.js?v=0.3.1"></script>
+<script type="module" src="sand.js?v=0.4.0"></script>
 </body>
 </html>

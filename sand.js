@@ -92,52 +92,85 @@ const sandGeo = new THREE.PlaneGeometry(TRAY_W, TRAY_D, N - 1, N - 1); sandGeo.r
 const pos = sandGeo.attributes.position;
 // 行方向：PlaneGeometry 旋转后第 0 行的 z 是 -D/2 还是 +D/2，运行时读一次
 const row0z = pos.getZ(0);
-const sandMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: litter.rough, metalness: 0, normalMap: grainNormalTexture(litter.grain), normalScale: new THREE.Vector2(0.6, 0.6) });
+const sandMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: litter.rough, metalness: 0, normalMap: grainNormalTexture(litter.grain), normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true });
+sandGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * N * 3).fill(1), 3));
 const sand = new THREE.Mesh(sandGeo, sandMat); sand.castShadow = true; sand.receiveShadow = true; scene.add(sand);
 let dirty = true;
 
-// ---------- 结块（屎 + 砂壳）：埋在砂里，挖到就露出来 ----------
+// ---------- 屎的种类 × 猫的习惯 ----------
+// 每种：形状、颜色、埋不埋（埋=砂面在它上面隆成壳，铲到壳才露）、尿团没有屎只有湿砂团、稀屎留污渍、有虫可见虫
+const POOP_TYPES = {
+  normal:   { name: '正常',     buried: true,  color: 0x5a3418, r: [1.6, 2.6], shape: 'swirl' },
+  exposed:  { name: '没埋',     buried: false, color: 0x5a3418, r: [1.6, 2.4], shape: 'swirl' },
+  soft:     { name: '稀屎',     buried: false, color: 0x7a4a22, r: [2.2, 3.2], shape: 'splat', stain: 0.8, gloss: true },
+  worms:    { name: '有虫',     buried: false, color: 0x5a3418, r: [1.8, 2.6], shape: 'swirl', worms: true },
+  black:    { name: '发黑',     buried: true,  color: 0x241611, r: [1.5, 2.3], shape: 'swirl' },
+  green:    { name: '发绿',     buried: true,  color: 0x4f5a2a, r: [1.5, 2.3], shape: 'swirl' },
+  urine:    { name: '尿团',     buried: true,  color: null,     r: [2.6, 3.6], shape: 'none', stain: 0.55 },
+};
+// 猫：习惯 = 各种屎的权重 + 埋的深浅
+const CATS = {
+  granny: { name: '阿婆（18 岁狸花）', w: { normal: 3, urine: 4, exposed: 2, soft: 1 }, depth: [0.2, 0.5] },
+  orange: { name: '小橘（贪吃）',       w: { normal: 3, soft: 3, urine: 2, black: 0.5 }, depth: [0.3, 0.8] },
+  coal:   { name: '煤球（洁癖）',       w: { normal: 5, urine: 3 }, depth: [0.7, 1.2] },
+  kitten: { name: '幼猫',               w: { normal: 2, exposed: 3, worms: 2, urine: 2, green: 0.5 }, depth: [0.1, 0.4] },
+  stray:  { name: '流浪猫',             w: { exposed: 4, soft: 2, worms: 2, black: 1 }, depth: [0.1, 0.3] },
+};
+let cat = CATS.granny;
+function pickType(c) { const ks = Object.keys(c.w); let t = 0; for (const k of ks) t += c.w[k]; let r = Math.random() * t; for (const k of ks) { r -= c.w[k]; if (r <= 0) return k; } return ks[0]; }
 const clumps = [];
 const clumpGroup = new THREE.Group(); scene.add(clumpGroup);
-function lumpyGeo(r) { const g = new THREE.IcosahedronGeometry(r, 4); const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.14; p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * 0.8, p.getZ(i) * k); } g.computeVertexNormals(); return g; }
-const poopMat = new THREE.MeshStandardMaterial({ color: 0x5a3418, roughness: 0.75 });
-function makeClump(r) {
-  const g = new THREE.Group();
-  const shellMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(litter.color).multiplyScalar(0.72), roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(1.2, 1.2) });
-  const shell = new THREE.Mesh(lumpyGeo(r), shellMat); shell.castShadow = true; shell.receiveShadow = true; g.add(shell);
-  // 露出砂壳的屎
-  for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(r * (0.42 - i * 0.08), 16, 12), poopMat); b.position.set((Math.random() - 0.5) * r * 0.9, r * (0.25 + i * 0.28), (Math.random() - 0.5) * r * 0.9); b.scale.y = 0.8; b.castShadow = true; g.add(b); }
+// 砂面染色（尿/稀屎的湿印）
+const tint = new Float32Array(N * N);
+function stainAt(x, z, r, amt) { brush(x, z, r, amt, (i, a) => { tint[i] = Math.min(1, tint[i] + a); }); }
+// 平滑的砂团（端起来时包着屎的那层结块壳）：用叠加正弦做圆润的凹凸，不用随机顶点
+function sandBall(r, flat = 1) {
+  const g = new THREE.SphereGeometry(r, 36, 24); const p = g.attributes.position; const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) { v.set(p.getX(i), p.getY(i), p.getZ(i)); const n = v.clone().normalize(); const k = 1 + 0.07 * Math.sin(n.x * 5.1 + 1.3) * Math.sin(n.y * 4.3) + 0.05 * Math.sin(n.z * 6.7 + n.x * 3.1); p.setXYZ(i, v.x * k, v.y * k * flat * 0.8, v.z * k); }
+  g.computeVertexNormals(); return g;
+}
+function ballMat() { return new THREE.MeshStandardMaterial({ color: new THREE.Color(litter.color).multiplyScalar(0.78), roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(1.1, 1.1) }); }
+function makePoopMesh(type, r) {
+  const T = POOP_TYPES[type]; const g = new THREE.Group(); if (T.shape === 'none') return g;
+  const mat = new THREE.MeshStandardMaterial({ color: T.color, roughness: T.gloss ? 0.3 : 0.8 });
+  if (T.shape === 'splat') { const m = new THREE.Mesh(sandBall(r, 0.28), mat); m.scale.set(1.15, 1, 0.9); g.add(m); }
+  else { for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.SphereGeometry(r * (0.46 - i * 0.09), 20, 14), mat); b.position.set((Math.random() - 0.5) * r * 0.5, r * (0.2 + i * 0.3), (Math.random() - 0.5) * r * 0.5); b.scale.y = 0.75; b.castShadow = true; g.add(b); } }
+  if (T.worms) { const wm = new THREE.MeshStandardMaterial({ color: 0xf2eee4, roughness: 0.5 }); for (let i = 0; i < 4; i++) { const w = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.55, 3, 6), wm); w.position.set((Math.random() - 0.5) * r * 1.2, r * 0.55 + Math.random() * r * 0.3, (Math.random() - 0.5) * r * 1.2); w.rotation.set(Math.random(), Math.random() * 3, Math.random()); g.add(w); } }
   return g;
 }
-function bury(x, z, depth) {
-  const r = 1.6 + Math.random() * 1.2;
-  const m = makeClump(r); const [gx, gy] = worldToGrid(x, z); const hs = h[gi(Math.round(gx), Math.round(gy))];
-  const y0 = hs - depth - r * 0.9; // 壳顶在砂面以下 depth 处
-  m.position.set(x, y0, z); m.rotation.y = Math.random() * 6.28; clumpGroup.add(m);
-  clumps.push({ mesh: m, x, z, r, y0 });
-  brush(x, z, r * 2.6, 0.28 + depth * 0.35, (i, a) => { h[i] += a; }); // 鼓包：找的破绽 [调]
+function bury(x, z, type, depth) {
+  const T = POOP_TYPES[type]; const r = T.r[0] + Math.random() * (T.r[1] - T.r[0]);
+  const [gx, gy] = worldToGrid(x, z); const hs = h[gi(Math.round(gx), Math.round(gy))];
+  const mesh = makePoopMesh(type, r); clumpGroup.add(mesh);
+  const c = { type, x, z, r, mesh, buried: T.buried, y0: 0 };
+  if (T.buried) { c.y0 = hs - depth - r * 0.9; brush(x, z, r * 2.6, 0.25 + depth * 0.35, (i, a) => { h[i] += a; }); }
+  else { c.y0 = hs - r * 0.15; }
+  mesh.position.set(x, c.y0, z); mesh.rotation.y = Math.random() * 6.28;
+  if (T.stain) stainAt(x, z, r * (T.buried ? 1.6 : 2.2), T.stain);
+  clumps.push(c); dirty = true; return c;
 }
-function buryRandom(n = 3) { for (let k = 0; k < n; k++) bury((Math.random() - 0.5) * (TRAY_W - 12), (Math.random() - 0.5) * (TRAY_D - 12), 0.3 + Math.random() * 0.5); dirty = true; }
-function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; }
-// 结块是实心的：它占的地方砂挖不走。每帧把它上方的砂面钳在「壳」的穹顶之上，挖到这层就停，屎从壳里冒出来
+function buryByCat(n = 1) { for (let k = 0; k < n; k++) { const type = pickType(cat); const d = cat.depth[0] + Math.random() * (cat.depth[1] - cat.depth[0]); bury((Math.random() - 0.5) * (TRAY_W - 14), (Math.random() - 0.5) * (TRAY_D - 14), type, d); } }
+function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; tint.fill(0); }
+// 埋着的：砂面钳在壳的穹顶之上；没埋的：坐在砂面上
 function updateClumps() {
   for (const c of clumps) {
-    const [gx, gy] = worldToGrid(c.x, c.z); const rc = c.r / CELL;
-    const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc));
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * 0.85; const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } }
+    const [gx, gy] = worldToGrid(c.x, c.z);
+    if (c.buried) { const rc = c.r / CELL; const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc)); for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * 0.85; const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } } }
+    else { const hs = h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; c.mesh.position.y = hs - c.r * 0.15; }
   }
 }
 
 const nrm = sandGeo.attributes.normal; const zSign = row0z > 0 ? -1 : 1;
 function pushGeometry() {
-  const py = pos.array, na = nrm.array;
+  const py = pos.array, na = nrm.array, ca = sandGeo.attributes.color.array;
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
     const i = gi(x, y); py[i * 3 + 1] = h[i];
     const hl = h[i - (x > 0 ? 1 : 0)], hr = h[i + (x < N - 1 ? 1 : 0)], hu = h[i - (y > 0 ? N : 0)], hd = h[i + (y < N - 1 ? N : 0)];
     let nx = (hl - hr) / (2 * CELL), nz = (hu - hd) / (2 * CELL) * zSign, ny = 1; const l = Math.hypot(nx, ny, nz);
     na[i * 3] = nx / l; na[i * 3 + 1] = ny / l; na[i * 3 + 2] = nz / l;
+    const t = tint[i]; ca[i * 3] = 1 - t * 0.28; ca[i * 3 + 1] = 1 - t * 0.34; ca[i * 3 + 2] = 1 - t * 0.42;
   }
-  pos.needsUpdate = true; nrm.needsUpdate = true;
+  pos.needsUpdate = true; nrm.needsUpdate = true; sandGeo.attributes.color.needsUpdate = true;
 }
 // 世界坐标 → 格子
 function worldToGrid(x, z) { const ix = (x + TRAY_W / 2) / TRAY_W * (N - 1); let iy = (z + TRAY_D / 2) / TRAY_D * (N - 1); if (row0z > 0) iy = (N - 1) - iy; return [ix, iy]; }
@@ -244,9 +277,19 @@ function scoopDig(dt) {
     for (let y = Math.max(0, Math.floor(gy0 - rz)); y <= Math.min(N - 1, Math.ceil(gy0 + rz)); y++) for (let x = Math.max(0, Math.floor(gx0 - rx)); x <= Math.min(N - 1, Math.ceil(gx0 + rx)); x++) { const i = gi(x, y); if (!inner.has(i) && Math.abs(x - gx0) <= rx && Math.abs(y - gy0) <= rz) ring.push(i); }
     const per = removed * 0.22 / Math.max(1, ring.length); for (const i of ring) h[i] += per;
   }
-  for (let k = clumps.length - 1; k >= 0; k--) { const c = clumps[k]; if (Math.abs(c.x - SC.px) > BW / 2 - 0.5 || Math.abs(c.z - SC.pz) > BD / 2 - 0.5) continue; if (SC.floor <= c.y0 + c.r * 0.45) { /* 铲刃滑到结块中线以下就端起来 */ clumps.splice(k, 1); clumpGroup.remove(c.mesh); blade.add(c.mesh); c.mesh.position.set(c.x - SC.px + (Math.random() - 0.5), 0.5 + c.r * 0.55, c.z - SC.pz); SC.held.push(c); } }
+  for (let k = clumps.length - 1; k >= 0; k--) {
+    const c = clumps[k]; if (Math.abs(c.x - SC.px) > BW / 2 - 0.5 || Math.abs(c.z - SC.pz) > BD / 2 - 0.5) continue;
+    const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; /* 铲刃滑到它底下 */
+    if (!under) continue;
+    clumps.splice(k, 1); clumpGroup.remove(c.mesh);
+    const T = POOP_TYPES[c.type]; const holder = new THREE.Group();
+    if (c.buried) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
+    else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
+    holder.position.set(c.x - SC.px + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), c.z - SC.pz); blade.add(holder); c.holder = holder; SC.held.push(c);
+    SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
+  }
 }
-function scoopDump() { SC.bagClumps += SC.held.length; for (const c of SC.held) blade.remove(c.mesh); SC.held = []; SC.wasted += SC.V; SC.V = 0; }
+function scoopDump() { SC.bagClumps += SC.held.length; for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.wasted += SC.V; SC.V = 0; }
 function updateScoop(dt) {
   if (!hit) { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
   if (tool !== 'scoop') return;
@@ -296,11 +339,12 @@ const ringGeo = new THREE.RingGeometry(0.9, 1, 48); ringGeo.rotateX(-Math.PI / 2
 cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false })); cursor.renderOrder = 10; scene.add(cursor);
 
 // UI
-document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); for (const c of clumps) { const sh = c.mesh.children[0]; sh.material.normalMap = sandMat.normalMap; sh.material.color.set(litter.color).multiplyScalar(0.72); sh.material.needsUpdate = true; } });
+document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); });
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
-document.getElementById('reset').onclick = () => { resetSand(); buryRandom(3); for (const c of SC.held) blade.remove(c.mesh); SC.held = []; SC.V = 0; };
-document.getElementById('bury').onclick = () => { buryRandom(1); };
+document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; };
+document.getElementById('bury').onclick = () => { buryByCat(1); };
+document.getElementById('cat').onchange = e => { cat = CATS[e.target.value]; };
 document.getElementById('flat').onclick = flattenAll;
 window.addEventListener('keydown', e => { if (e.shiftKey) tool = 'pour'; });
 window.addEventListener('keyup', e => { if (!e.shiftKey && tool === 'pour' && document.querySelector('[data-tool].on').dataset.tool !== 'pour') tool = document.querySelector('[data-tool].on').dataset.tool; });
@@ -309,9 +353,9 @@ function resize() { const w = innerWidth, hh = innerHeight; renderer.setSize(w, 
 addEventListener('resize', resize); resize();
 
 // ---------- 主循环 ----------
-resetSand(); buryRandom(3);
+resetSand(); buryByCat(4);
 let last = performance.now(), fpsT = 0, frames = 0;
-window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryRandom, SC, bin };
+window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bin, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit) && tool !== 'scoop') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
@@ -322,7 +366,7 @@ function frame(now) {
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
-  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨 · 袋里 ${SC.bagClumps} 坨 · 浪费砂 ${Math.round(SC.wasted)}`; frames = 0; fpsT = 0; }
+  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${SC.bagClumps} 坨 · 浪费砂 ${Math.round(SC.wasted)}`; frames = 0; fpsT = 0; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
