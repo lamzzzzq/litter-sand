@@ -322,6 +322,17 @@ const HOVER_Y = WALL_H + 4.5;                        // 默认悬在盆口上方
 let siftT = 0.8;                                     // 「晃一晃筛砂」提示节流
 const wireMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.92, roughness: 0.22 });
 const gripMat = new THREE.MeshStandardMaterial({ color: 0x8e9299, roughness: 0.7 });
+const plasMat = new THREE.MeshPhysicalMaterial({ color: 0x7fc8bd, roughness: 0.42, clearcoat: 0.5, clearcoatRoughness: 0.35, side: THREE.DoubleSide });
+const plasGrip = new THREE.MeshStandardMaterial({ color: 0x4f8f86, roughness: 0.6 });
+// 四把工具：漏砂倍率 / 容量倍率 / 用什么材质 / 是不是夹子
+const SCOOPS = {
+  wire:    { name: '钢丝铲', leak: 1.0,  cap: 1.0,  bars: 9, mat: () => wireMat, grip: () => gripMat, wireR: 1.0 },
+  plastic: { name: '塑料铲', leak: 1.45, cap: 0.9,  bars: 6, mat: () => plasMat, grip: () => plasGrip, wireR: 2.2 }, /* 缝更宽，漏得更快 */
+  solid:   { name: '全封铲', leak: 0,    cap: 1.3,  solid: true, mat: () => plasMat, grip: () => plasGrip },        /* 一点不漏：砂全被端走 */
+  tongs:   { name: '筷子夹', leak: 0,    cap: 0,    tongs: true, mat: () => wireMat, grip: () => gripMat },         /* 不铲砂，松手就夹 */
+};
+let scoopKind = 'wire';
+const SK = () => SCOOPS[scoopKind];
 let YAW = 0.55; const YAW_R = 0.55; /* 右手持：铲头朝左前，柄在右下；到盆右侧 1/4 换左手（镜像） */
 let hand = 1;                       /* +1 右手 / -1 左手，带回差，不从 YAW 反推（贴壁时 YAW 会转到 ±π/2、π） */
 const angLerp = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t; /* 走最短弧，跨 ±π 不会绕远路 */
@@ -342,47 +353,80 @@ function rodBetween(a, b, r0, r1, mat, seg = 10) {
   m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
   return m;
 }
-{
-  /* 真猫砂铲是簸箕形，不是一块平网：平底 → 后半段起翘成后壁，两侧起壁，只有前沿是开口的平刃。
-     钢丝顺着「底 + 后壁」一根根弯上去（缝隙仍沿 x 方向，筛砂逻辑不变）。 */
-  const NZ = 18;
-  for (let i = 0; i < BARS; i++) {
-    const x = -BW / 2 + (i + 0.5) * (BW / BARS), wp = [];
-    for (let k = 0; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; wp.push(new THREE.Vector3(x, bladeFloorY(z), z)); }
-    const w = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wp), 26, WIRE * 0.85, 6, false), wireMat);
-    w.castShadow = true; blade.add(w);
+const rig = new THREE.Group(); blade.add(rig);   // 铲头本体，换工具时整组重建
+let jawL = null, jawR = null, tongOpen = 0;      // 筷子夹的两根钳臂
+function clearRig() { for (let i = rig.children.length - 1; i >= 0; i--) { const o = rig.children[i]; o.traverse(n => n.geometry && n.geometry.dispose()); rig.remove(o); } jawL = jawR = null; }
+function buildRig() {
+  clearRig();
+  const K = SK(), MAT = K.mat(), GRIP = K.grip();
+  /* 杆：从后壁顶接出去，抬到 ~45°（太平的话贴墙下铲会从盆壁里穿出去）。
+     必须挂在 blade 上 —— 挂 scoop 的话铲面一倾斜杆不跟着转就脱开了。 */
+  const P0 = new THREE.Vector3(0, BACK_H - 0.35, BD / 2 - 0.35);
+  const P1 = new THREE.Vector3(0, BACK_H + 2.2, BD / 2 + 2.0);
+  const P2 = new THREE.Vector3(0, BACK_H + 7.5, BD / 2 + 6.8);
+  const hdir = new THREE.Vector3().subVectors(P2, P1).normalize();
+  const addHandle = (neckMat, r0) => {
+    const neck = rodBetween(P0, P1, r0, r0 * 1.15, neckMat, 10); neck.castShadow = true; rig.add(neck);
+    const grip = rodBetween(P1, P2, 0.62, 0.78, GRIP, 16); grip.castShadow = true; rig.add(grip);
+    rig.add(rodBetween(P1.clone().addScaledVector(hdir, -0.55), P1.clone().addScaledVector(hdir, 1.1), 0.5, 0.62, neckMat, 14)); /* 接头套管 */
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.78, 14, 10), GRIP); cap.position.copy(P2); cap.scale.y = 0.7; cap.castShadow = true; rig.add(cap);
+    const hole = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.16, 8, 18), GRIP); hole.position.copy(P2).addScaledVector(hdir, 0.55); hole.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hdir); rig.add(hole);
+  };
+  if (K.tongs) {
+    /* 筷子夹：两根长臂从顶上的弹簧圈张开成 V，钳口就在铲面前沿那个位置（下沉/防穿模都沿用同一套坐标） */
+    const PIV = new THREE.Vector3(0, BACK_H + 1.4, BD / 2 - 0.6), TIPZ = -BD / 2 + 1.2;
+    for (const side of [-1, 1]) {
+      const g = new THREE.Group(); g.position.copy(PIV); rig.add(g);
+      const a = new THREE.Vector3(0, 0, 0), b = new THREE.Vector3(side * 1.1, -(BACK_H + 1.4), TIPZ - (BD / 2 - 0.6));
+      const arm = rodBetween(a, b, 0.34, 0.16, MAT, 10); arm.castShadow = true; g.add(arm);
+      const pad = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8), MAT); pad.position.copy(b); pad.scale.set(1, 0.55, 1.4); pad.castShadow = true; g.add(pad); /* 夹垫 */
+      if (side < 0) jawL = g; else jawR = g;
+    }
+    const spring = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.2, 8, 22, Math.PI * 1.5), MAT); spring.position.copy(PIV); spring.rotation.y = Math.PI / 2; spring.castShadow = true; rig.add(spring);
+    addHandle(MAT, 0.3);
+    return;
   }
-  // 外框：前沿平刃 → 右侧上沿一路爬高 → 后壁顶 → 左侧下来，一根闭合钢丝
-  const pts = [];
+  if (K.solid) {
+    /* 全封铲：一块实心壳，砂一点漏不下去 */
+    const NZ = 24, shell = new THREE.PlaneGeometry(BW, BD, 1, NZ); shell.rotateX(-Math.PI / 2);
+    const sp = shell.attributes.position; for (let i = 0; i < sp.count; i++) sp.setY(i, bladeFloorY(sp.getZ(i)));
+    shell.computeVertexNormals();
+    const sh = new THREE.Mesh(shell, MAT); sh.castShadow = true; sh.receiveShadow = true; rig.add(sh);
+    for (const sx of [-BW / 2, BW / 2]) {   // 两side实心侧壁
+      const pos = [], idx = [];
+      for (let k = 0; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; pos.push(sx, bladeFloorY(z), z, sx, bladeSideY(z), z); }
+      for (let k = 0; k < NZ; k++) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+      const w = new THREE.Mesh(g, MAT); w.castShadow = true; rig.add(w);
+    }
+    addHandle(MAT, 0.34);
+  } else {
+    /* 有缝的：钢丝 / 塑料条，顺着「底+后壁」一根根弯上去（缝隙沿 x，筛砂逻辑不变） */
+    const NZ = 18, BARS = K.bars, R = WIRE * K.wireR;
+    for (let i = 0; i < BARS; i++) {
+      const x = -BW / 2 + (i + 0.5) * (BW / BARS), wp = [];
+      for (let k = 0; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; wp.push(new THREE.Vector3(x, bladeFloorY(z), z)); }
+      const w = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wp), 26, R * 0.85, 6, false), MAT);
+      w.castShadow = true; rig.add(w);
+    }
+    for (const sx of [-BW / 2, BW / 2]) for (let k = 1; k <= 5; k++) {
+      const z = -BD / 2 + BD * k / 6, y0 = bladeFloorY(z), y1 = bladeSideY(z);
+      if (y1 - y0 < 0.35) continue;
+      const s = rodBetween(new THREE.Vector3(sx, y0, z), new THREE.Vector3(sx, y1, z), R * 0.7, R * 0.7, MAT, 6); s.castShadow = true; rig.add(s);
+    }
+    for (const yy of [BACK_H * 0.42, BACK_H * 0.78]) { const z = backZAtY(yy); rig.add(rodBetween(new THREE.Vector3(-BW / 2, yy, z), new THREE.Vector3(BW / 2, yy, z), R * 0.8, R * 0.8, MAT, 8)); }
+    addHandle(MAT, R);
+  }
+  // 外框：前沿平刃 → 侧上沿爬高 → 后壁顶 → 另一侧下来，一根闭合边条
+  const NZ = 18, pts = [];
   pts.push(new THREE.Vector3(-BW / 2 + 1.1, 0, -BD / 2), new THREE.Vector3(BW / 2 - 1.1, 0, -BD / 2));
   for (let k = 1; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; pts.push(new THREE.Vector3(BW / 2, bladeSideY(z), z)); }
   pts.push(new THREE.Vector3(BW / 2 - 1.1, BACK_H, BD / 2), new THREE.Vector3(-BW / 2 + 1.1, BACK_H, BD / 2));
   for (let k = NZ; k >= 1; k--) { const z = -BD / 2 + BD * k / NZ; pts.push(new THREE.Vector3(-BW / 2, bladeSideY(z), z)); }
-  const frame = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 190, WIRE, 8, true), wireMat); frame.castShadow = true; blade.add(frame);
-  // 侧壁竖丝：底边 → 侧上沿
-  for (const sx of [-BW / 2, BW / 2]) for (let k = 1; k <= 5; k++) {
-    const z = -BD / 2 + BD * k / 6, y0 = bladeFloorY(z), y1 = bladeSideY(z);
-    if (y1 - y0 < 0.35) continue;
-    const s = rodBetween(new THREE.Vector3(sx, y0, z), new THREE.Vector3(sx, y1, z), WIRE * 0.7, WIRE * 0.7, wireMat, 6); s.castShadow = true; blade.add(s);
-  }
-  // 后壁横丝
-  for (const yy of [BACK_H * 0.42, BACK_H * 0.78]) {
-    const z = backZAtY(yy);
-    blade.add(rodBetween(new THREE.Vector3(-BW / 2, yy, z), new THREE.Vector3(BW / 2, yy, z), WIRE * 0.8, WIRE * 0.8, wireMat, 8));
-  }
-  /* 杆：必须挂在 blade 上（挂 scoop 的话铲面一倾斜杆不跟着转，就脱开了），
-     且用两点连接生成，端点对端点焊死，不靠手算 position+rotation 去凑。
-     从后壁顶接出去，抬到 ~45°：杆太平的话贴墙下铲时整根会从盆壁里穿出去。 */
-  const P0 = new THREE.Vector3(0, BACK_H - 0.35, BD / 2 - 0.35);  // 焊在后壁顶
-  const P1 = new THREE.Vector3(0, BACK_H + 2.2, BD / 2 + 2.0);    // 折弯处（金属→塑料握把）
-  const P2 = new THREE.Vector3(0, BACK_H + 7.5, BD / 2 + 6.8);    // 握把末端
-  const neck = rodBetween(P0, P1, WIRE * 1.15, WIRE * 1.3, wireMat, 10); neck.castShadow = true; blade.add(neck);
-  const grip = rodBetween(P1, P2, 0.62, 0.78, gripMat, 16); grip.castShadow = true; blade.add(grip);
-  const dir = new THREE.Vector3().subVectors(P2, P1).normalize();
-  const ferrule = rodBetween(P1.clone().addScaledVector(dir, -0.55), P1.clone().addScaledVector(dir, 1.1), 0.5, 0.62, wireMat, 14); blade.add(ferrule); /* 接头套管，盖住金属杆插进握把的那一截 */
-  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.78, 14, 10), gripMat); cap.position.copy(P2); cap.scale.y = 0.7; cap.castShadow = true; blade.add(cap);
-  const hole = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.16, 8, 18), gripMat); hole.position.copy(P2).addScaledVector(dir, 0.55); hole.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir); blade.add(hole); /* 挂钩孔 */
+  const frame = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 190, WIRE * (K.wireR || 1) * 1.05, 8, true), MAT);
+  frame.castShadow = true; rig.add(frame);
 }
+buildRig();
 const pileGeo = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2); { const p = pileGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k, p.getY(i), p.getZ(i) * k); } pileGeo.computeVertexNormals(); }
 const pileMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) });
 const pile = new THREE.Mesh(pileGeo, pileMat); pile.castShadow = true; pile.position.y = 0.05; blade.add(pile);
@@ -408,7 +452,7 @@ function buildHeap() {
 let heapLast = -1;
 function updateHeap(fill) {
   if (!heapMesh) return;
-  heapMesh.visible = fill > 0.01; if (!heapMesh.visible) return;
+  heapMesh.visible = fill > 0.01 && !SK().tongs; if (!heapMesh.visible) return;
   const sx = pile.scale.x, sy = pile.scale.y, sz = pile.scale.z;
   if (Math.abs(sy - heapLast) < 1e-3) return; /* 只有堆的大小变了才要重算+重传 */
   heapLast = sy;
@@ -463,8 +507,9 @@ function updateParticles(dt) {
 }
 function bladeCells(pad = 0) { const out = []; const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const dEff = BD * Math.max(0.3, Math.cos(SC.tilt)); /* 铲面立起来，吃砂的面积变窄 */ const R = (Math.hypot(BW, dEff) / 2 + pad) / CELL; for (let y = Math.max(0, Math.floor(gy0 - R)); y <= Math.min(N - 1, Math.ceil(gy0 + R)); y++) for (let x = Math.max(0, Math.floor(gx0 - R)); x <= Math.min(N - 1, Math.ceil(gx0 + R)); x++) { const [wx, wz] = gridToWorld(x, y); const [lx, lz] = toLocal(wx, wz); const u = lx / (BW / 2 + pad), v = (lz + (BD - dEff) / 2) / (dEff / 2 + pad); /* 以前沿为准往后缩 */ if (Math.abs(u) > 1 || Math.abs(v) > 1) continue; if (Math.max(Math.abs(u), Math.abs(v)) > 0.8 && u * u + v * v > 1.1) continue; out.push(gi(x, y)); } return out; }
 function scoopDig(dt) {
+  if (SK().tongs) return;                  /* 夹子不铲砂，只在松手时夹 */
   const cells = bladeCells(); if (!cells.length) return;
-  let removed = 0; const room = V_CAP - SC.V;
+  let removed = 0; const room = V_CAP * SK().cap - SC.V;
   for (const i of cells) { const target = Math.max(SC.floor, 0.05); if (h[i] > target) { const take = Math.min(h[i] - target, DIG_RATE * dt, Math.max(0, room - removed) / cells.length * 4); h[i] -= take; removed += take; } }
   if (removed > 0) { SC.V += removed * 0.78; dirty = true;
     const inner = new Set(cells); const ring = bladeCells(1.4).filter(i => !inner.has(i));
@@ -522,17 +567,48 @@ function wallClearLift(t) {
   }
   return need;
 }
+// ---------- 筷子夹：按住下探（钳口张开），松手就夹 ----------
+const TONG_Z = -BD / 2 + 1.2;                 /* 钳口在铲面前沿那个位置，下沉/防穿模沿用同一套坐标 */
+function tongTip() { return [SC.px + TONG_Z * Math.sin(YAW), SC.pz + TONG_Z * Math.cos(YAW)]; }
+function tongsGrab() {
+  if (SC.held.length) { DISP.msg = '手上还夹着一坨，先倒掉'; return; }
+  const [wx, wz] = tongTip();
+  let best = null, bd = 1e9;
+  for (const c of clumps) {
+    if (c.stick > 0) continue;                                  /* 黏死在盆底的夹不动 */
+    const top = c.buried ? c.y0 + c.r * 0.6 : c.mesh.position.y + c.r * 0.5;
+    if (SC.floor > top + 0.8) continue;                         /* 钳口得探到它那个深度 */
+    const d = Math.hypot(c.x - wx, c.z - wz);
+    if (d < c.r + 2.4 && d < bd) { bd = d; best = c; }
+  }
+  if (!best) { DISP.msg = '夹空了'; return; }
+  const c = best; clumps.splice(clumps.indexOf(c), 1); clumpGroup.remove(c.mesh);
+  const holder = new THREE.Group(); c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); holder.add(c.mesh);
+  holder.position.set(0, 0.25 + c.r * 0.55, TONG_Z); blade.add(holder);
+  c.holder = holder; c.p = null;                                /* p=null → updateHeld 跳过：夹住的不会在铲面上滚 */
+  SC.held.push(c); SC.last = POOP_TYPES[c.type].name; DISP.msg = `夹起来了（${SC.last}）`;
+  if (POOP_TYPES[c.type].stain) stainAt(c.x, c.z, c.r * 1.5, 0.3);
+}
+function tongsRelease() { /* 松开钳口，东西自己掉下去 */
+  for (let k = SC.held.length - 1; k >= 0; k--) {
+    const c = SC.held[k]; tmpW.copy(c.holder.position); blade.localToWorld(tmpW);
+    blade.remove(c.holder); scene.add(c.holder); c.holder.position.copy(tmpW);
+    fallen.push({ c, v: new THREE.Vector3((Math.random() - 0.5) * 2, -2, (Math.random() - 0.5) * 2) });
+    SC.held.splice(k, 1);
+  }
+}
 function updateScoop(dt) {
   if (tool !== 'scoop') { scoop.visible = false; return; }
   if (!hit && !DUMP.on) { scoop.visible = false; return; } /* 还没动过鼠标：别把铲子摆在盆中央半埋着 */
   scoop.visible = true;
   if (DUMP.on) { /* 倒的过程接管铲子，鼠标先别管 */
     dumpStep(dt);
+    if (jawL) { jawL.rotation.z = tongOpen * 0.34; jawR.rotation.z = -tongOpen * 0.34; }
     SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 飞过去的路上也别蹭到容器 */
     scoop.position.set(SC.px, SC.y, SC.pz);
     blade.rotation.x = SC.tilt;
     blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5);
-    const f0 = Math.min(1, SC.V / V_CAP); pile.visible = f0 > 0.01; pile.scale.set(BW * 0.42 * (0.55 + f0 * 0.45), 0.6 + f0 * 1.9, BD * 0.42 * (0.55 + f0 * 0.45)); updateHeap(f0);
+    const f0 = Math.min(1, SC.V / (V_CAP * (SK().cap || 1))); pile.visible = f0 > 0.01 && !SK().tongs; pile.scale.set(BW * 0.42 * (0.55 + f0 * 0.45), 0.6 + f0 * 1.9, BD * 0.42 * (0.55 + f0 * 0.45)); updateHeap(f0);
     return;
   }
   if (!hit) return;
@@ -586,13 +662,17 @@ function updateScoop(dt) {
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.2 : -0.06) - SC.tilt) * Math.min(1, dt * 6); /* 端着自然往后仰，东西靠柄那边 */
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     /* 筛砂：铲起来是满满一铲（砂+结块+屎），端着不动几乎不漏，得左右晃着筛，松砂才从钢丝缝里掉下去，屎和结块留在条上 */
-    if (SC.V > 0.5) { const rate = litter.leak * (0.05 + 5.5 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.08 * dt * litter.leak); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); } /* 粒数上限太低会让单粒砂量过大，落点戳出一根针 */
-    if (SC.V > V_CAP * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = '满满一铲，左右晃一晃把猫砂筛下去'; siftT = 2.2; } } else if (SC.V < V_CAP * 0.08) siftT = 0.8;
+    const LK = litter.leak * SK().leak;
+    if (SC.V > 0.5 && LK > 0) { const rate = LK * (0.05 + 5.5 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.08 * dt * LK); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); } /* 粒数上限太低会让单粒砂量过大，落点戳出一根针 */
+    const capNow = V_CAP * SK().cap;
+    if (SC.V > capNow * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = LK > 0 ? '满满一铲，左右晃一晃把猫砂筛下去' : '全封铲不漏砂 —— 这一铲砂只能跟着一起倒掉'; siftT = 2.2; } } else if (SC.V < capNow * 0.08) siftT = 0.8;
   }
   SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 兜底：按住往下沉时也不许沉进容器里 */
+  /* 钳口开合：按住下探时张开，松手夹住时合上（夹着东西也保持微张，看得出咬住了） */
+  if (jawL) { const want = SK().tongs && SC.state === 'dig' ? 1 : (SC.held.length ? 0.28 : 0.12); tongOpen += (want - tongOpen) * Math.min(1, dt * 12); jawL.rotation.z = tongOpen * 0.34; jawR.rotation.z = -tongOpen * 0.34; }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
   blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
-  const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
+  const fill = Math.min(1, SC.V / (V_CAP * (SK().cap || 1))); pile.visible = fill > 0.01 && !SK().tongs; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
 }
 // ---------- 丢的地方：垃圾袋 + 马桶 ----------
 const bagMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f4f0, roughness: 0.55, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
@@ -741,7 +821,8 @@ function dumpStep(dt) {
   const CX = toBag ? bag.position.x : toilet.position.x, CZ = toBag ? bag.position.z : toilet.position.z;
   /* 东西是从铲口掉下去的，铲口在铲子中心前方 BD/2 —— 拿中心去对准容器，掉下来的就全在外面。
      反推：把铲子中心放到「容器中心 + 铲口偏移」，让铲口正对容器口。 */
-  const TX = CX + (BD / 2) * Math.sin(YAW), TZ = CZ + (BD / 2) * Math.cos(YAW);
+  const dropOff = SK().tongs ? -TONG_Z : BD / 2;             /* 夹子从钳口掉，铲子从前沿掉 */
+  const TX = CX + dropOff * Math.sin(YAW), TZ = CZ + dropOff * Math.cos(YAW);
   const TY = (toBag ? BAG_TOP + 6 : TOI_RIM + 5);          /* 铲子要比容器高，倒的时候东西才掉得下去 */
   DUMP.t += dt;
   const k = Math.min(1, dt * 4);
@@ -749,6 +830,11 @@ function dumpStep(dt) {
   if (DUMP.phase === 'to') {
     SC.tilt += (0.18 - SC.tilt) * Math.min(1, dt * 5);      /* 端平了飞过去，路上别撒 */
     if (Math.hypot(SC.px - TX, SC.pz - TZ) < 2.5 && Math.abs(SC.y - TY) < 2.5) { DUMP.phase = 'tip'; DUMP.t = 0; DUMP.had = SC.held.length; }
+  } else if (DUMP.phase === 'tip' && SK().tongs) {
+    /* 夹子不用翻，张口放掉就行 */
+    tongOpen += (1 - tongOpen) * Math.min(1, dt * 8);
+    if (SC.held.length && tongOpen > 0.6) tongsRelease();
+    if (!SC.held.length || DUMP.t > 2.5) { DUMP.phase = 'back'; DUMP.t = 0; if (!DUMP.had) DISP.msg = '钳子是空的'; }
   } else if (DUMP.phase === 'tip') {
     SC.tilt += (-1.55 - SC.tilt) * Math.min(1, dt * 3.2);   /* 慢慢翻过去：屎顺着钢丝滑到前沿，自己掉下去 */
     if (SC.V > 0.5) { const dV = Math.min(SC.V, SC.V * 7 * dt + 8 * dt); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); SC.wasted += dV; }
@@ -853,7 +939,11 @@ cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
 let liftStart = null;
 cv.addEventListener('pointermove', e => { hit = pick(e); if (tool === 'lift' && pressing && liftStart) { TILT.tz = Math.max(-0.7, Math.min(0.7, liftStart.tz - (e.clientX - liftStart.x) / 260)); TILT.tx = Math.max(-0.7, Math.min(0.7, liftStart.tx + (e.clientY - liftStart.y) / 260)); } });
-cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig' || SC.state === 'floor') SC.state = 'carry'; });
+cv.addEventListener('pointerup', () => {
+  const wasDigging = SC.state === 'dig';
+  pressing = false; if (SC.state === 'dig' || SC.state === 'floor') SC.state = 'carry';
+  if (tool === 'scoop' && SK().tongs && wasDigging && !DUMP.on) tongsGrab(); /* 松手 = 合钳 */
+});
 cv.addEventListener('pointercancel', () => { pressing = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 // 光标环
@@ -862,6 +952,13 @@ cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, 
 
 // UI
 document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; rMat.color.set(litter.color).multiplyScalar(0.92); rMat.size = litter.pSize; resetSand(); buildPellets(); buildHeap(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
+document.querySelectorAll('[data-scoop]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('[data-scoop]').forEach(x => x.classList.toggle('on', x === b));
+  for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; /* 换工具＝换一把新的，手上的先放下 */
+  scoopKind = b.dataset.scoop; tongOpen = 0; buildRig();
+  if (tool !== 'scoop') { tool = 'scoop'; document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x.dataset.tool === 'scoop')); }
+  DISP.msg = SK().tongs ? '按住下探，松手就夹' : SK().leak === 0 ? '全封铲：一点砂都不漏' : SK().name;
+});
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
 document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; };
