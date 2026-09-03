@@ -247,7 +247,7 @@ const GAP = BW / BARS - WIRE * 2;                    // 缝宽 ≈1.0：比它�
 const DIG_DEPTH = 2.4, DIG_RATE = 8, V_CAP = 2400;   // 铲入深度、速率、铲上砂容量（格高单位）[调]
 const wireMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.92, roughness: 0.22 });
 const gripMat = new THREE.MeshStandardMaterial({ color: 0x8e9299, roughness: 0.7 });
-const YAW = 0.55; /* 右手持：铲头朝左前，柄在右下 */
+let YAW = 0.55; const YAW_R = 0.55; /* 右手持：铲头朝左前，柄在右下；到盆右侧 1/4 换左手（镜像） */
 const scoop = new THREE.Group(); scoop.rotation.y = YAW; scene.add(scoop);
 const gridToWorld = (gx, gy) => [-TRAY_W / 2 + gx * CELL, row0z < 0 ? -TRAY_D / 2 + gy * CELL : TRAY_D / 2 - gy * CELL];
 const toLocal = (wx, wz) => { const dx = wx - SC.px, dz = wz - SC.pz; return [dx * Math.cos(YAW) - dz * Math.sin(YAW), dx * Math.sin(YAW) + dz * Math.cos(YAW)]; };
@@ -325,6 +325,7 @@ function updateScoop(dt) {
   const tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
   const nx = SC.px + (tx - SC.px) * Math.min(1, dt * 18), nz = SC.pz + (tz - SC.pz) * Math.min(1, dt * 18);
   SC.vx = (nx - SC.px) / Math.max(dt, 1e-3); SC.vz = (nz - SC.pz) / Math.max(dt, 1e-3); SC.px = nx; SC.pz = nz;
+  const wantLeft = SC.px > TRAY_W / 4 - (YAW < 0 ? 4 : 0); /* 带 4 的回差，别在线上抖 */ YAW += ((wantLeft ? -YAW_R : YAW_R) - YAW) * Math.min(1, dt * 7); scoop.rotation.y = YAW;
   const speed = Math.hypot(SC.vx, SC.vz); SC.shake = SC.shake * 0.85 + Math.min(1, speed / 45) * 0.15;
   const [gx, gy] = worldToGrid(SC.px, SC.pz);
   // 铲面四角任一角压到盆壁或盆外 → 抬到盆沿以上，不能铲（碰撞）
@@ -334,15 +335,19 @@ function updateScoop(dt) {
   const fx = SC.px + (-BD / 2 + 1.2) * Math.sin(YAW), fz = SC.pz + (-BD / 2 + 1.2) * Math.cos(YAW);
   const inside = Math.abs(fx) <= TRAY_W / 2 - 0.6 && Math.abs(fz) <= TRAY_D / 2 - 0.6;
   SC.steep = Math.min(1, overhang / (BD * 0.8));
+  const outsideAll = Math.abs(SC.px) > TRAY_W / 2 + WALL + 4 || Math.abs(SC.pz) > TRAY_D / 2 + WALL + 4; /* 整把铲在盆外的地上 */
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
-  if (pressing && inside) {
+  if (pressing && outsideAll) { /* 地上铲：贴地，捡散落的 */
+    SC.state = 'floor'; SC.y += (0.9 - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.12 - SC.tilt) * Math.min(1, dt * 8);
+    if (!SC.digCaught) for (let k = loose.length - 1; k >= 0; k--) { const c = loose[k]; const [lx, lz] = toLocal(c.holder.position.x, c.holder.position.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; loose.splice(k, 1); scene.remove(c.holder); blade.add(c.holder); c.holder.position.set(lx, 0.35 + c.r * 0.3, lz); c.holder.rotation.set(0, 0, 0); c.p = { x: lx, z: lz, vx: 0, vz: 0 }; SC.held.push(c); SC.digCaught = true; SC.last = POOP_TYPES[c.type].name; DISP.msg = '从地上铲起来了'; break; }
+  } else if (pressing && inside) {
     if (SC.state !== 'dig') { SC.state = 'dig'; SC.floor = hs - DIG_DEPTH; }
     const tTilt = -0.28 - SC.steep * 0.95; /* 越靠墙越竖，最多约 70° */
     SC.y += ((SC.floor + 0.3 + Math.sin(-tTilt) * BD * 0.5) - SC.y) * Math.min(1, dt * 10); SC.tilt += (tTilt - SC.tilt) * Math.min(1, dt * 8);
     scoopDig(dt);
   } else {
     SC.state = (SC.V > 1 || SC.held.length) ? 'carry' : 'hover';
-    const ty = SC.overWall ? WALL_H + 3.2 + (SC.state === 'carry' ? 1 : 0) : Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
+    const ty = outsideAll ? 3.5 + (SC.state === 'carry' ? 1 : 0) : SC.overWall ? WALL_H + 3.2 + (SC.state === 'carry' ? 1 : 0) : Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.2 : -0.06) - SC.tilt) * Math.min(1, dt * 6); /* 端着自然往后仰，东西靠柄那边 */
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     if (SC.V > 0.5) { const rate = litter.leak * (0.28 + 3.2 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.3 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
@@ -369,7 +374,7 @@ const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32), new THREE.MeshPh
 const DISP = { bag: 0, flushed: 0, clogged: 0, flushT: 0, clogT: 0, msg: '', dropped: 0 };
 // ---------- 铲上的屎会滚、会掉 ----------
 // 铲面倾角 + 铲子加速度的假力推着它在条上滚；撞框边弹一下；速度太大或倾太多就翻过框掉出去
-const fallen = []; const tmpW = new THREE.Vector3();
+const fallen = [], loose = []; const tmpW = new THREE.Vector3();
 let prevVx = 0, prevVz = 0;
 function updateHeld(dt) {
   const ax = (SC.vx - prevVx) / Math.max(dt, 1e-3), az = (SC.vz - prevVz) / Math.max(dt, 1e-3); prevVx = SC.vx; prevVz = SC.vz;
@@ -397,12 +402,17 @@ function updateFallen(dt) {
   for (let k = fallen.length - 1; k >= 0; k--) {
     const f = fallen[k], m = f.c.holder; f.v.y -= 60 * dt; m.position.addScaledVector(f.v, dt); m.rotation.x += f.v.z * dt * 0.5; m.rotation.z -= f.v.x * dt * 0.5;
     const inside = Math.abs(m.position.x) <= TRAY_W / 2 - 1 && Math.abs(m.position.z) <= TRAY_D / 2 - 1;
+    const onRim = !inside && Math.abs(m.position.x) <= TRAY_W / 2 + WALL + 3 && Math.abs(m.position.z) <= TRAY_D / 2 + WALL + 3;
     let ground = 0; if (inside) { const [gx, gy] = worldToGrid(m.position.x, m.position.z); ground = h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; }
-    else if (Math.abs(m.position.x) <= TRAY_W / 2 + WALL + 1 && Math.abs(m.position.z) <= TRAY_D / 2 + WALL + 1) ground = WALL_H; /* 搁在盆沿上 */
+    if (onRim && m.position.y <= WALL_H + f.c.r * 0.4 && m.position.y > 2) { /* 砸到盆沿：弹一下往里或往外滚，不停在沿上 */
+      const ox = Math.abs(m.position.x) - TRAY_W / 2, oz = Math.abs(m.position.z) - TRAY_D / 2; const outward = Math.max(ox, oz) > WALL * 0.5;
+      const dirx = (ox > oz ? Math.sign(m.position.x) : 0) * (outward ? 1 : -1), dirz = (oz >= ox ? Math.sign(m.position.z) : 0) * (outward ? 1 : -1);
+      f.v.x = dirx * 9 + (Math.random() - 0.5) * 3; f.v.z = dirz * 9 + (Math.random() - 0.5) * 3; f.v.y = 4; m.position.y = WALL_H + f.c.r * 0.4 + 0.05; continue;
+    }
     if (m.position.y <= ground + f.c.r * 0.3) {
       fallen.splice(k, 1); const c = f.c; scene.remove(m);
       if (inside) { /* 回到砂上：变成一坨露在外面的 */ c.buried = false; c.x = m.position.x; c.z = m.position.z; c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); if (c.ball) { c.mesh.position.y = 0; } clumpGroup.add(m); m.position.set(c.x, ground, c.z); m.rotation.set(0, 0, 0); c.mesh = m; c.holder = null; clumps.push(c); DISP.msg = '掉回砂上了'; }
-      else { m.position.y = ground + c.r * 0.3; scene.add(m); DISP.dropped++; DISP.msg = '掉到盆外了'; }
+      else { m.position.y = ground + c.r * 0.3; scene.add(m); c.holder = m; loose.push(c); DISP.dropped++; DISP.msg = '掉到盆外了，去地上铲'; }
     }
   }
 }
@@ -510,7 +520,7 @@ cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
 let liftStart = null;
 cv.addEventListener('pointermove', e => { hit = pick(e); if (tool === 'lift' && pressing && liftStart) { TILT.tz = Math.max(-0.7, Math.min(0.7, liftStart.tz - (e.clientX - liftStart.x) / 260)); TILT.tx = Math.max(-0.7, Math.min(0.7, liftStart.tx + (e.clientY - liftStart.y) / 260)); } });
-cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig') SC.state = 'carry'; });
+cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig' || SC.state === 'floor') SC.state = 'carry'; });
 cv.addEventListener('pointercancel', () => { pressing = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 // 光标环
@@ -534,7 +544,7 @@ addEventListener('resize', resize); resize();
 // ---------- 主循环 ----------
 resetSand(); buryByCat(4);
 let last = performance.now(), fpsT = 0, frames = 0;
-window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bag, toilet, DISP, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
+window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bag, toilet, DISP, loose, fallen, scene, get yaw() { return YAW; }, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit) && tool !== 'scoop' && tool !== 'lift') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
