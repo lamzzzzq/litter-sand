@@ -151,11 +151,11 @@ function bury(x, z, type, depth) {
   const c = { type, x, z, r, mesh, buried: T.buried, y0: 0 };
   if (T.buried) { c.y0 = hs - depth - r * 0.9; brush(x, z, r * 2.6, 0.25 + depth * 0.35, (i, a) => { h[i] += a; }); }
   else { c.y0 = hs - r * 0.15; }
-  /* 尿往下渗：砂薄处大概率一路渗到盆底结成黏底饼，得铲到底反复刮才下来 */
+  /* 尿往下渗：砂薄处才容易一路渗到盆底结成黏底饼（满砂 ~16%，砂薄到见底 ~90%），得铲到底反复刮才下来 */
   if (type === 'urine' && litter.clumping) {
-    const pStick = Math.min(1, Math.max(0.25, (5.2 - hs) / 2.5));
-    if (c.y0 - c.r * 0.8 < 0.4 || Math.random() < pStick) {
-      c.stick = 4 + (c.r > 3 ? 2 : 0); c.wasStuck = true; c.y0 = c.r * 0.35; c.domeK = 0.45; /* 压扁贴底 */
+    const pStick = Math.min(0.9, Math.max(0.1, (6.2 - hs) / 4.5));
+    if (Math.random() < pStick) {
+      c.stick = 4 + Math.floor(Math.random() * 3); c.wasStuck = true; c.y0 = c.r * 0.35; /* 压扁贴底；不设 domeK：黏底饼不钳砂面，砂挖走了它才露出来 */
       const w = litter.wet; /* 结在底上的尿饼：湿砂色、压扁、贴着盆底 */
       const cake = new THREE.Mesh(sandBall(r * 0.95, 0.5), new THREE.MeshStandardMaterial({ color: new THREE.Color(litter.color).multiply(new THREE.Color(w[0], w[1], w[2])).multiplyScalar(0.9), roughness: 0.75, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(1.2, 1.2) }));
       cake.castShadow = true; mesh.add(cake); c.cake = cake;
@@ -172,7 +172,7 @@ function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clum
 function updateClumps() {
   for (const c of clumps) {
     const [gx, gy] = worldToGrid(c.x, c.z);
-    if (c.buried) { const rc = c.r / CELL; const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc)); for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * (c.domeK || 0.85); const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } } }
+    if (c.buried && !c.wasStuck) { const rc = c.r / CELL; /* 黏底饼不钳砂面：钳了就永远挖不到底（还会成无限砂源） */ const x0 = Math.max(0, Math.floor(gx - rc)), x1 = Math.min(N - 1, Math.ceil(gx + rc)), y0 = Math.max(0, Math.floor(gy - rc)), y1 = Math.min(N - 1, Math.ceil(gy + rc)); for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const d2 = ((x - gx) ** 2 + (y - gy) ** 2) / (rc * rc); if (d2 >= 1) continue; const dome = c.y0 + Math.sqrt(1 - d2) * c.r * (c.domeK || 0.85); const i = gi(x, y); if (h[i] < dome) { h[i] = dome; dirty = true; } } }
     else { const hs = h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; c.mesh.position.y = hs - c.r * 0.15; }
   }
 }
@@ -331,12 +331,13 @@ function scoopDig(dt) {
   for (const c of clumps) {
     if (!c.stick) continue;
     const [lx, lz] = toLocal(c.x, c.z);
-    c.scrapeCd = Math.max(0, (c.scrapeCd || 0) - dt);
+    /* 提示节流和刮擦冷却分开两个计时器：共用会把「使劲刮」提示后紧接着的第一下真刮吃掉 */
+    c.scrapeCd = Math.max(0, (c.scrapeCd || 0) - dt); c.msgCd = Math.max(0, (c.msgCd || 0) - dt);
     if (Math.abs(lx) > BW / 2 + 0.5 || Math.abs(lz) > BD / 2 + 0.5) continue;
     const atFloor = SC.floor <= c.y0 + c.r * 0.3;      /* 铲刃真的探到饼底那一层 */
     const speed = Math.hypot(SC.vx, SC.vz);
-    if (!atFloor) { if (!c.scrapeCd) { DISP.msg = '砂还没清干净，铲不到底'; c.scrapeCd = 0.5; } continue; }
-    if (speed < 14) { if (!c.scrapeCd) { DISP.msg = '黏死在盆底了，得使劲刮'; c.scrapeCd = 0.5; } continue; }
+    if (!atFloor) { if (!c.msgCd) { DISP.msg = '砂还没清干净，铲不到底'; c.msgCd = 0.5; } continue; }
+    if (speed < 14) { if (!c.msgCd) { DISP.msg = '黏死在盆底了，得使劲刮'; c.msgCd = 0.5; } continue; }
     if (c.scrapeCd > 0) continue;
     c.stick--; c.scrapeCd = 0.3; SC.shake = Math.min(1, SC.shake + 0.4);
     scrapeBurst(c);
@@ -355,7 +356,7 @@ function scoopDig(dt) {
     if (c.buried && litter.clumping && !c.wasStuck) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
     else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
     else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
-    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), lz); blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
+    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.wasStuck ? 0.4 : c.buried ? 0.8 : 0.3), lz); /* 扁饼比砂球薄，按饼厚放，别飘在钢丝上方 */ blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
     SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
   }
 }
