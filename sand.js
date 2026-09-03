@@ -10,10 +10,10 @@ const WALL = 1.6, WALL_H = 9;
 const BASE_H = 5.5;            // 初始砂深 [调]
 const CELL = TRAY_W / (N - 1);
 const LITTERS = {
-  bentonite: { name: '膨润土', color: 0xd4c39c, talus: 34, grain: 1.0, rough: 0.95, slumpK: 0.35, fine: true, leak: 1.0 },
-  tofu:      { name: '豆腐砂', color: 0xeee5cc, talus: 38, grain: 1.6, rough: 0.9,  slumpK: 0.25, fine: false, leak: 1.5 },
-  crystal:   { name: '水晶砂', color: 0xe4eef2, talus: 30, grain: 2.2, rough: 0.35, slumpK: 0.45, fine: false, leak: 0.7 },
-  pine:      { name: '松木砂', color: 0xc8a672, talus: 36, grain: 1.8, rough: 0.85, slumpK: 0.3,  fine: false, leak: 1.2 },
+  bentonite: { name: '膨润土', color: 0xd4c39c, talus: 34, grain: 1.0, rough: 0.95, slumpK: 0.35, leak: 1.3, clumping: true,  crumble: 0,   flushable: false, bounce: 0,    pSize: 0.34, wet: [0.72, 0.66, 0.58], noFlush: '膨润土遇水膨胀，马桶堵了' },
+  tofu:      { name: '豆腐砂', color: 0xeee5cc, talus: 38, grain: 1.6, rough: 0.9,  slumpK: 0.25, leak: 1.1, clumping: true,  crumble: 0.6, flushable: true,  bounce: 0.1,  pSize: 0.5,  wet: [0.8, 0.74, 0.62], noFlush: '' },
+  crystal:   { name: '水晶砂', color: 0xe4eef2, talus: 30, grain: 2.2, rough: 0.35, slumpK: 0.45, leak: 1.5, clumping: false, crumble: 0,   flushable: false, bounce: 0.55, pSize: 0.7,  wet: [0.98, 0.9, 0.55], noFlush: '水晶砂是硅胶，不溶，只能扔垃圾桶' },
+  pine:      { name: '松木砂', color: 0xc8a672, talus: 36, grain: 1.8, rough: 0.85, slumpK: 0.3,  leak: 0.9, clumping: false, crumble: 0,   flushable: false, bounce: 0.25, pSize: 0.6,  wet: [0.62, 0.5, 0.36], noFlush: '松木砂不能冲，可以堆肥' },
 };
 let litter = LITTERS.bentonite;
 let tool = 'scoop', brushSize = 3;
@@ -26,9 +26,9 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2a2118);
 const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 500);
-camera.position.set(0, 60, 40);
+camera.position.set(6, 62, 44);
 const controls = new OrbitControls(camera, cv);
-controls.target.set(0, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.target.set(6, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
 controls.minDistance = 25; controls.maxDistance = 120; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
 controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
@@ -141,6 +141,7 @@ function makePoopMesh(type, r) {
 function bury(x, z, type, depth) {
   const T = POOP_TYPES[type]; const r = T.r[0] + Math.random() * (T.r[1] - T.r[0]);
   const [gx, gy] = worldToGrid(x, z); const hs = h[gi(Math.round(gx), Math.round(gy))];
+  if (type === 'urine' && !litter.clumping) { stainAt(x, z, r * 1.8, 0.9); if (litter === LITTERS.pine) brush(x, z, r * 1.5, -0.35, (i, a) => { h[i] += a; }); dirty = true; return null; }
   const mesh = makePoopMesh(type, r); clumpGroup.add(mesh);
   const c = { type, x, z, r, mesh, buried: T.buried, y0: 0 };
   if (T.buried) { c.y0 = hs - depth - r * 0.9; brush(x, z, r * 2.6, 0.25 + depth * 0.35, (i, a) => { h[i] += a; }); }
@@ -168,7 +169,7 @@ function pushGeometry() {
     const hl = h[i - (x > 0 ? 1 : 0)], hr = h[i + (x < N - 1 ? 1 : 0)], hu = h[i - (y > 0 ? N : 0)], hd = h[i + (y < N - 1 ? N : 0)];
     let nx = (hl - hr) / (2 * CELL), nz = (hu - hd) / (2 * CELL) * zSign, ny = 1; const l = Math.hypot(nx, ny, nz);
     na[i * 3] = nx / l; na[i * 3 + 1] = ny / l; na[i * 3 + 2] = nz / l;
-    const t = tint[i]; ca[i * 3] = 1 - t * 0.28; ca[i * 3 + 1] = 1 - t * 0.34; ca[i * 3 + 2] = 1 - t * 0.42;
+    const t = tint[i], w = litter.wet; ca[i * 3] = 1 - t * (1 - w[0]); ca[i * 3 + 1] = 1 - t * (1 - w[1]); ca[i * 3 + 2] = 1 - t * (1 - w[2]);
   }
   pos.needsUpdate = true; nrm.needsUpdate = true; sandGeo.attributes.color.needsUpdate = true;
 }
@@ -222,7 +223,10 @@ const GAP = BW / BARS - WIRE * 2;                    // 缝宽 ≈1.0：比它�
 const DIG_DEPTH = 2.4, DIG_RATE = 8, V_CAP = 2400;   // 铲入深度、速率、铲上砂容量（格高单位）[调]
 const wireMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.92, roughness: 0.22 });
 const gripMat = new THREE.MeshStandardMaterial({ color: 0x8e9299, roughness: 0.7 });
-const scoop = new THREE.Group(); scene.add(scoop);
+const YAW = 0.55; /* 右手持：铲头朝左前，柄在右下 */
+const scoop = new THREE.Group(); scoop.rotation.y = YAW; scene.add(scoop);
+const gridToWorld = (gx, gy) => [-TRAY_W / 2 + gx * CELL, row0z < 0 ? -TRAY_D / 2 + gy * CELL : TRAY_D / 2 - gy * CELL];
+const toLocal = (wx, wz) => { const dx = wx - SC.px, dz = wz - SC.pz; return [dx * Math.cos(YAW) - dz * Math.sin(YAW), dx * Math.sin(YAW) + dz * Math.cos(YAW)]; };
 const blade = new THREE.Group(); scoop.add(blade);
 {
   const pts = []; const rr = 1.2; const segs = 8;
@@ -242,7 +246,7 @@ const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0
 const PMAX = 4000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pAmt = new Float32Array(PMAX); const pAlive = new Uint8Array(PMAX); let pHead = 0;
 const pGeo = new THREE.BufferGeometry(); pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-const pMat = new THREE.PointsMaterial({ color: litter.color, size: 0.42, sizeAttenuation: true, transparent: true, opacity: 0.95 });
+const pMat = new THREE.PointsMaterial({ color: litter.color, size: litter.pSize, sizeAttenuation: true, transparent: true, opacity: 0.95 });
 const points = new THREE.Points(pGeo, pMat); points.frustumCulled = false; scene.add(points);
 for (let i = 0; i < PMAX; i++) pPos[i * 3 + 1] = -100;
 const tmpV = new THREE.Vector3();
@@ -262,30 +266,30 @@ function updateParticles(dt) {
     if (!pAlive[i]) continue; any = true;
     pVel[i * 3 + 1] -= 60 * dt;
     const x = pPos[i * 3] += pVel[i * 3] * dt, y = pPos[i * 3 + 1] += pVel[i * 3 + 1] * dt, z = pPos[i * 3 + 2] += pVel[i * 3 + 2] * dt;
-    if (Math.abs(x) <= TRAY_W / 2 && Math.abs(z) <= TRAY_D / 2) { const [gx, gy] = worldToGrid(x, z); const ci = gi(Math.round(gx), Math.round(gy)); if (y <= h[ci] + 0.12) { const a = pAmt[i]; const cx = Math.round(gx), cy = Math.round(gy); h[ci] += a * 0.4; if (cx > 0) h[ci - 1] += a * 0.15; if (cx < N - 1) h[ci + 1] += a * 0.15; if (cy > 0) h[ci - N] += a * 0.15; if (cy < N - 1) h[ci + N] += a * 0.15; dirty = true; pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } }
+    if (Math.abs(x) <= TRAY_W / 2 && Math.abs(z) <= TRAY_D / 2) { const [gx, gy] = worldToGrid(x, z); const ci = gi(Math.round(gx), Math.round(gy)); if (y <= h[ci] + 0.12) { if (litter.bounce > 0 && pVel[i * 3 + 1] < -7) { pPos[i * 3 + 1] = h[ci] + 0.13; pVel[i * 3 + 1] *= -litter.bounce; pVel[i * 3] += (Math.random() - 0.5) * 6 * litter.bounce; pVel[i * 3 + 2] += (Math.random() - 0.5) * 6 * litter.bounce; continue; } const a = pAmt[i]; const cx = Math.round(gx), cy = Math.round(gy); h[ci] += a * 0.4; if (cx > 0) h[ci - 1] += a * 0.15; if (cx < N - 1) h[ci + 1] += a * 0.15; if (cy > 0) h[ci - N] += a * 0.15; if (cy < N - 1) h[ci + N] += a * 0.15; dirty = true; pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } }
     else if (y <= -0.9) { pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; }
   }
   if (any) pGeo.attributes.position.needsUpdate = true;
 }
-function bladeCells() { const out = []; const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const rx = BW / 2 / CELL, rz = BD / 2 / CELL; for (let y = Math.max(0, Math.floor(gy0 - rz)); y <= Math.min(N - 1, Math.ceil(gy0 + rz)); y++) for (let x = Math.max(0, Math.floor(gx0 - rx)); x <= Math.min(N - 1, Math.ceil(gx0 + rx)); x++) { const u = (x - gx0) / rx, v = (y - gy0) / rz; if (Math.abs(u) > 1 || Math.abs(v) > 1) continue; if (Math.max(Math.abs(u), Math.abs(v)) > 0.8 && u * u + v * v > 1.1) continue; out.push(gi(x, y)); } return out; }
+function bladeCells(pad = 0) { const out = []; const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const R = (Math.hypot(BW, BD) / 2 + pad) / CELL; for (let y = Math.max(0, Math.floor(gy0 - R)); y <= Math.min(N - 1, Math.ceil(gy0 + R)); y++) for (let x = Math.max(0, Math.floor(gx0 - R)); x <= Math.min(N - 1, Math.ceil(gx0 + R)); x++) { const [wx, wz] = gridToWorld(x, y); const [lx, lz] = toLocal(wx, wz); const u = lx / (BW / 2 + pad), v = lz / (BD / 2 + pad); if (Math.abs(u) > 1 || Math.abs(v) > 1) continue; if (Math.max(Math.abs(u), Math.abs(v)) > 0.8 && u * u + v * v > 1.1) continue; out.push(gi(x, y)); } return out; }
 function scoopDig(dt) {
   const cells = bladeCells(); if (!cells.length) return;
   let removed = 0; const room = V_CAP - SC.V;
   for (const i of cells) { const target = Math.max(SC.floor, 0.05); if (h[i] > target) { const take = Math.min(h[i] - target, DIG_RATE * dt, Math.max(0, room - removed) / cells.length * 4); h[i] -= take; removed += take; } }
   if (removed > 0) { SC.V += removed * 0.78; dirty = true;
-    const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const ring = []; const rx = BW / 2 / CELL + 6, rz = BD / 2 / CELL + 6; const inner = new Set(cells);
-    for (let y = Math.max(0, Math.floor(gy0 - rz)); y <= Math.min(N - 1, Math.ceil(gy0 + rz)); y++) for (let x = Math.max(0, Math.floor(gx0 - rx)); x <= Math.min(N - 1, Math.ceil(gx0 + rx)); x++) { const i = gi(x, y); if (!inner.has(i) && Math.abs(x - gx0) <= rx && Math.abs(y - gy0) <= rz) ring.push(i); }
+    const inner = new Set(cells); const ring = bladeCells(1.4).filter(i => !inner.has(i));
     const per = removed * 0.22 / Math.max(1, ring.length); for (const i of ring) h[i] += per;
   }
   for (let k = clumps.length - 1; k >= 0; k--) {
-    const c = clumps[k]; if (Math.abs(c.x - SC.px) > BW / 2 - 0.5 || Math.abs(c.z - SC.pz) > BD / 2 - 0.5) continue;
+    const c = clumps[k]; const [lx, lz] = toLocal(c.x, c.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue;
     const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; /* 铲刃滑到它底下 */
     if (!under) continue;
     clumps.splice(k, 1); clumpGroup.remove(c.mesh);
     const T = POOP_TYPES[c.type]; const holder = new THREE.Group();
-    if (c.buried) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
+    if (c.buried && litter.clumping) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
+    else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
     else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
-    holder.position.set(c.x - SC.px + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), c.z - SC.pz); blade.add(holder); c.holder = holder; SC.held.push(c);
+    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.buried ? 0.8 : 0.3), lz); blade.add(holder); c.holder = holder; SC.held.push(c);
     SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
   }
 }
@@ -307,13 +311,40 @@ function updateScoop(dt) {
     SC.state = (SC.V > 1 || SC.held.length) ? 'carry' : 'hover';
     const ty = Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.06 : -0.1) - SC.tilt) * Math.min(1, dt * 6);
+    if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     if (SC.V > 0.5) { const rate = litter.leak * (0.28 + 3.2 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.3 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
   }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
   const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45));
 }
-const bin = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 3.6, 9, 24, 1, true), new THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.9, side: THREE.DoubleSide })); bin.position.set(TRAY_W / 2 + 12, 4.5, 0); bin.castShadow = true; bin.receiveShadow = true; scene.add(bin);
-const binFloor = new THREE.Mesh(new THREE.CircleGeometry(3.6, 24), new THREE.MeshStandardMaterial({ color: 0x3a3128 })); binFloor.rotation.x = -Math.PI / 2; binFloor.position.set(bin.position.x, 0.05, 0); scene.add(binFloor);
+// ---------- 丢的地方：垃圾袋 + 马桶 ----------
+const bagMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f4f0, roughness: 0.55, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
+const bag = new THREE.Group(); bag.position.set(TRAY_W / 2 + 11, 0, 9); scene.add(bag);
+{ const prof = []; for (let i = 0; i <= 14; i++) { const t = i / 14; const rr = 3.2 + Math.sin(t * 9) * 0.25 + t * 1.1; prof.push(new THREE.Vector2(rr * (i === 0 ? 0.6 : 1), t * 8.5)); }
+  const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 28), bagMat); body.castShadow = true; body.receiveShadow = true; bag.add(body);
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(4.3, 0.22, 8, 36), bagMat); lip.rotation.x = Math.PI / 2; lip.position.y = 8.5; bag.add(lip);
+  const inside = new THREE.Mesh(new THREE.CircleGeometry(3.4, 28), new THREE.MeshStandardMaterial({ color: 0x2a2118 })); inside.rotation.x = -Math.PI / 2; inside.position.y = 6.5; bag.add(inside); }
+const toilet = new THREE.Group(); toilet.position.set(TRAY_W / 2 + 13, 0, -10); scene.add(toilet);
+const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32), new THREE.MeshPhysicalMaterial({ color: 0xbfe0f0, roughness: 0.05, transparent: true, opacity: 0.9 }));
+{ const cer = new THREE.MeshPhysicalMaterial({ color: 0xf7f7f5, roughness: 0.18, clearcoat: 0.8 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.8, 7, 28), cer); base.position.y = 3.5; base.castShadow = true; base.receiveShadow = true; toilet.add(base);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 3.6, 3.4, 32, 1, true), new THREE.MeshPhysicalMaterial({ color: 0xf7f7f5, roughness: 0.18, clearcoat: 0.8, side: THREE.DoubleSide })); bowl.position.y = 8.2; bowl.castShadow = true; toilet.add(bowl);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(4.6, 0.55, 12, 40), cer); rim.rotation.x = Math.PI / 2; rim.position.y = 9.9; rim.castShadow = true; toilet.add(rim);
+  water.rotation.x = -Math.PI / 2; water.position.y = 7.4; toilet.add(water);
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(6.5, 7, 2.6), cer); tank.position.set(0, 12.5, -4.2); tank.castShadow = true; toilet.add(tank); }
+const DISP = { bag: 0, flushed: 0, clogged: 0, flushT: 0, clogT: 0, msg: '' };
+function dumpTo(where) {
+  const n = SC.held.length, v = SC.V;
+  for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0;
+  if (where === 'bag') { DISP.bag += n; SC.wasted += v; DISP.msg = n ? `${n} 坨进袋${v > 300 ? '，带了不少砂' : ''}` : '倒了一铲砂进袋'; }
+  else if (!litter.flushable && (v > 250 || n)) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
+  else { DISP.flushed += n; DISP.flushT = 1.4; DISP.msg = n ? `冲走 ${n} 坨` : '冲了一下'; }
+}
+function updateDispose(dt) {
+  if (DISP.flushT > 0) { DISP.flushT -= dt; water.rotation.z += dt * 9; water.scale.setScalar(0.55 + Math.abs(Math.sin(DISP.flushT * 4)) * 0.45); water.material.color.set(0xbfe0f0); }
+  else if (DISP.clogT > 0) { DISP.clogT -= dt; water.scale.setScalar(1.25); water.material.color.set(0x9a7a4a); }
+  else { water.scale.setScalar(1); water.material.color.set(0xbfe0f0); }
+}
 
 // ---------- 输入 ----------
 const ray = new THREE.Raycaster(); const ndc = new THREE.Vector2();
@@ -328,7 +359,7 @@ function pick(e) {
 }
 const inTray = p => p && Math.abs(p.x) <= TRAY_W / 2 && Math.abs(p.z) <= TRAY_D / 2;
 cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick(e);
-  if (tool === 'scoop') { const rect = cv.getBoundingClientRect(); ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1); ray.setFromCamera(ndc, camera); if (ray.intersectObject(bin, false).length && (SC.V > 1 || SC.held.length)) { scoopDump(); return; } }
+  if (tool === 'scoop') { const rect = cv.getBoundingClientRect(); ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1); ray.setFromCamera(ndc, camera); if (SC.V > 1 || SC.held.length) { if (ray.intersectObject(bag, true).length) { dumpTo('bag'); return; } if (ray.intersectObject(toilet, true).length) { dumpTo('toilet'); return; } } }
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
 cv.addEventListener('pointermove', e => { hit = pick(e); });
 cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig') SC.state = 'carry'; });
@@ -339,7 +370,7 @@ const ringGeo = new THREE.RingGeometry(0.9, 1, 48); ringGeo.rotateX(-Math.PI / 2
 cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false })); cursor.renderOrder = 10; scene.add(cursor);
 
 // UI
-document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); });
+document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
 document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; };
@@ -355,18 +386,18 @@ addEventListener('resize', resize); resize();
 // ---------- 主循环 ----------
 resetSand(); buryByCat(4);
 let last = performance.now(), fpsT = 0, frames = 0;
-window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bin, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
+window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bag, toilet, DISP, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit) && tool !== 'scoop') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
   slump(2);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
-  updateScoop(dt); updateParticles(dt);
+  updateScoop(dt); updateParticles(dt); updateDispose(dt);
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
-  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${SC.bagClumps} 坨 · 浪费砂 ${Math.round(SC.wasted)}`; frames = 0; fpsT = 0; }
+  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${DISP.bag} 坨 · 冲走 ${DISP.flushed} · 堵 ${DISP.clogged} 次 · 浪费砂 ${Math.round(SC.wasted)}${DISP.msg ? ' · ' + DISP.msg : ''}`; frames = 0; fpsT = 0; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
