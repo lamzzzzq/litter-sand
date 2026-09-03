@@ -11,3 +11,14 @@ html,body{height:100%;background:#2a2118;overflow:hidden;font-family:-apple-syst
 #ui input[type=range]{width:100px}
 #ui .hint{opacity:.75;font-size:12px}
 #ui select{font:inherit;background:#2a2118;color:#f3e9d6;border:1px solid #6b5a3e;border-radius:6px;padding:3px 6px}
+
+/* 右上角金币 HUD + 掉进容器时的礼花/金币 */
+#hud{position:fixed;right:16px;top:14px;z-index:3;display:flex;align-items:center;gap:7px;
+  background:rgba(27,21,16,.82);border-radius:999px;padding:7px 16px 7px 12px;backdrop-filter:blur(6px);
+  border:1px solid #6b5a3e;pointer-events:none}
+#coinIcon{font-size:20px;line-height:1}
+#coinNum{font-size:19px;font-weight:800;color:#ffcc4d;min-width:1.4em;text-align:left;
+  font-variant-numeric:tabular-nums;text-shadow:0 1px 0 rgba(0,0,0,.5);display:inline-block}
+.fx{position:fixed;left:0;top:0;z-index:4;pointer-events:none;will-change:transform,opacity}
+.fx.coin{font-size:22px;line-height:1;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5))}
+.fx.conf{width:8px;height:12px;border-radius:2px}

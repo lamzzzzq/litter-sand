@@ -452,8 +452,8 @@ function updateParticles(dt) {
     const x = pPos[i * 3] += pVel[i * 3] * dt, y = pPos[i * 3 + 1] += pVel[i * 3 + 1] * dt, z = pPos[i * 3 + 2] += pVel[i * 3 + 2] * dt;
     if (Math.abs(x) <= TRAY_W / 2 && Math.abs(z) <= TRAY_D / 2) { const [gx, gy] = worldToGrid(x, z); const ci = gi(Math.round(gx), Math.round(gy)); if (y <= h[ci] + 0.12) { if (litter.bounce > 0 && pVel[i * 3 + 1] < -7) { pPos[i * 3 + 1] = h[ci] + 0.13; pVel[i * 3 + 1] *= -litter.bounce; pVel[i * 3] += (Math.random() - 0.5) * 6 * litter.bounce; pVel[i * 3 + 2] += (Math.random() - 0.5) * 6 * litter.bounce; continue; } const a = pAmt[i]; const cx = Math.round(gx), cy = Math.round(gy); h[ci] += a * 0.4; if (cx > 0) h[ci - 1] += a * 0.15; if (cx < N - 1) h[ci + 1] += a * 0.15; if (cy > 0) h[ci - N] += a * 0.15; if (cy < N - 1) h[ci + N] += a * 0.15; dirty = true; pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } }
     else if (y <= -0.9
-      || (y < TOI_RIM && Math.hypot(x - toilet.position.x, z - toilet.position.z) < TOI_R)
-      || (y < BAG_TOP && Math.hypot(x - bag.position.x, z - bag.position.z) < BAG_R)) { pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } /* 倒进容器里的砂别穿过去 */
+      || (y < TOI_RIM + 1.5 && Math.hypot(x - toilet.position.x, z - toilet.position.z) < TOI_R)
+      || (y < BAG_TOP + 1.5 && Math.hypot(x - bag.position.x, z - bag.position.z) < BAG_R)) { pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } /* 砂到容器口就消失，不穿过去 */
   }
   if (any) pGeo.attributes.position.needsUpdate = true;
 }
@@ -673,19 +673,71 @@ const DUMP = { on: false, tgt: null, phase: '', t: 0, had: 0 };
 function startDump(where) { if (DUMP.on) return; DUMP.on = true; DUMP.tgt = where; DUMP.phase = 'to'; DUMP.t = 0; DUMP.had = 0; SC.state = 'carry'; pressing = false; }
 /* SC.state 必须清掉：留在 'dig' 的话 updateHeld 会一直当「前面被砂堵着」，倒的时候一坨都掉不出来 */
 /* 掉落物落进容器口 → 吞掉并记账 */
+/* 到口就算进去了，直接消失，不模拟掉进容器内部（里面本来也看不见） */
 function swallow(m) {
-  if (Math.hypot(m.position.x - bag.position.x, m.position.z - bag.position.z) < BAG_R && m.position.y < BAG_TOP) return 'bag';
-  if (Math.hypot(m.position.x - toilet.position.x, m.position.z - toilet.position.z) < TOI_R && m.position.y < TOI_RIM) return 'toilet';
+  if (Math.hypot(m.position.x - bag.position.x, m.position.z - bag.position.z) < BAG_R && m.position.y < BAG_TOP + 1.5) return 'bag';
+  if (Math.hypot(m.position.x - toilet.position.x, m.position.z - toilet.position.z) < TOI_R && m.position.y < TOI_RIM + 1.5) return 'toilet';
   return null;
 }
+// ---------- 掉进容器的奖励：礼花从口里冒出来，金币飞到右上角 ----------
+const COIN_ICON = document.getElementById('coinIcon'), COIN_NUM = document.getElementById('coinNum');
+const CONF_COLORS = ['#ffcc4d', '#ff8a5c', '#6ad2c4', '#c78cff', '#ff6f91', '#8ee06a'];
+const PAY = { normal: 5, exposed: 5, soft: 6, worms: 7, black: 6, green: 6, urine: 4 }; /* 越难处理给得越多 */
+let coins = 0;
+const projV = new THREE.Vector3();
+function toScreen(x, y, z) { /* 3D 点 → 屏幕像素 */
+  projV.set(x, y, z).project(camera);
+  return [(projV.x * 0.5 + 0.5) * innerWidth, (-projV.y * 0.5 + 0.5) * innerHeight];
+}
+function bumpCoins() {
+  coins++; COIN_NUM.textContent = coins;
+  COIN_NUM.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.55)' }, { transform: 'scale(1)' }], { duration: 300, easing: 'ease-out' });
+}
+function flyCoin(sx, sy, delay) {
+  const el = document.createElement('div'); el.className = 'fx coin'; el.textContent = '🪙'; document.body.appendChild(el);
+  const r = COIN_ICON.getBoundingClientRect(), tx = r.left + r.width / 2 - 11, ty = r.top + r.height / 2 - 11;
+  const mx = sx + (tx - sx) * 0.28 + (Math.random() - 0.5) * 130, my = sy - 90 - Math.random() * 90; /* 先窜起来再刷过去 */
+  const a = el.animate([
+    { transform: `translate(${sx}px,${sy}px) scale(.35)`, opacity: 0 },
+    { transform: `translate(${mx}px,${my}px) scale(1.2)`, opacity: 1, offset: .34 },
+    { transform: `translate(${tx}px,${ty}px) scale(.55)`, opacity: .95 },
+  ], { duration: 620 + Math.random() * 260, delay, easing: 'cubic-bezier(.3,.8,.35,1)', fill: 'forwards' });
+  a.onfinish = () => { el.remove(); bumpCoins(); };
+}
+function confetti(sx, sy, n) {
+  for (let i = 0; i < n; i++) {
+    const el = document.createElement('div'); el.className = 'fx conf';
+    el.style.background = CONF_COLORS[i % CONF_COLORS.length]; document.body.appendChild(el);
+    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 1.7, sp = 130 + Math.random() * 230;
+    const dx = Math.cos(ang) * sp, dy = Math.sin(ang) * sp, spin = (Math.random() - 0.5) * 900;
+    const a = el.animate([
+      { transform: `translate(${sx}px,${sy}px) rotate(0deg) scale(1)`, opacity: 1 },
+      { transform: `translate(${sx + dx * .62}px,${sy + dy * .8}px) rotate(${spin}deg) scale(1)`, opacity: 1, offset: .45 },
+      { transform: `translate(${sx + dx}px,${sy + dy * .35 + 260}px) rotate(${spin * 1.9}deg) scale(.85)`, opacity: 0 },
+    ], { duration: 850 + Math.random() * 550, easing: 'cubic-bezier(.2,.7,.5,1)', fill: 'forwards' });
+    a.onfinish = () => el.remove();
+  }
+}
+function celebrate(where, type) {
+  const mouthY = where === 'bag' ? BAG_TOP : TOI_RIM;
+  const o = where === 'bag' ? bag.position : toilet.position;
+  const [sx, sy] = toScreen(o.x, mouthY, o.z);
+  confetti(sx, sy, 16);
+  const n = PAY[type] || 4;
+  for (let i = 0; i < n; i++) flyCoin(sx + (Math.random() - 0.5) * 26, sy + (Math.random() - 0.5) * 16, i * 55);
+}
 function swallowClump(where, c) {
+  celebrate(where, c.type);
   if (where === 'bag') { DISP.bag++; DISP.msg = `${POOP_TYPES[c.type].name}进袋了`; }
   else if (!litter.flushable) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
   else { DISP.flushed++; DISP.flushT = 1.4; DISP.msg = `冲走了（${POOP_TYPES[c.type].name}）`; }
 }
 function dumpStep(dt) {
   const toBag = DUMP.tgt === 'bag';
-  const TX = toBag ? bag.position.x : toilet.position.x, TZ = toBag ? bag.position.z : toilet.position.z;
+  const CX = toBag ? bag.position.x : toilet.position.x, CZ = toBag ? bag.position.z : toilet.position.z;
+  /* 东西是从铲口掉下去的，铲口在铲子中心前方 BD/2 —— 拿中心去对准容器，掉下来的就全在外面。
+     反推：把铲子中心放到「容器中心 + 铲口偏移」，让铲口正对容器口。 */
+  const TX = CX + (BD / 2) * Math.sin(YAW), TZ = CZ + (BD / 2) * Math.cos(YAW);
   const TY = (toBag ? BAG_TOP + 6 : TOI_RIM + 5);          /* 铲子要比容器高，倒的时候东西才掉得下去 */
   DUMP.t += dt;
   const k = Math.min(1, dt * 4);
