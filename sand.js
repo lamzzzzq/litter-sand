@@ -395,7 +395,8 @@ function buildRig() {
     for (const sx of [-BW / 2, BW / 2]) {   // 两side实心侧壁
       const pos = [], idx = [];
       for (let k = 0; k <= NZ; k++) { const z = -BD / 2 + BD * k / NZ; pos.push(sx, bladeFloorY(z), z, sx, bladeSideY(z), z); }
-      for (let k = 0; k < NZ; k++) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      const flip = sx < 0; /* 两片墙 x 恒定，叉积恒 +x，左边那片得翻绕序，否则法线朝里 */
+      for (let k = 0; k < NZ; k++) { const a = k * 2; if (flip) idx.push(a + 2, a + 1, a, a + 2, a + 3, a + 1); else idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
       const w = new THREE.Mesh(g, MAT); w.castShadow = true; rig.add(w);
     }
@@ -475,7 +476,8 @@ const tmpV = new THREE.Vector3();
 function spawnLeak(n, amtEach) {
   for (let k = 0; k < n; k++) {
     const i = pHead; pHead = (pHead + 1) % PMAX;
-    const gap = Math.floor(Math.random() * (BARS - 1)); const lx = -BW / 2 + (gap + 1) * (BW / BARS) + (Math.random() - 0.5) * GAP * 0.8; const lz = (Math.random() - 0.5) * (BD - 1.5);
+    const nb = SK().bars || BARS, gw = BW / nb; /* 缝位要按当前这把铲的条数算，写死 9 条的话塑料铲的粒子会从实心条上喷出来 */
+    const gap = Math.floor(Math.random() * (nb - 1)); const lx = -BW / 2 + (gap + 1) * gw + (Math.random() - 0.5) * (gw - WIRE * 2 * (SK().wireR || 1)) * 0.8; const lz = (Math.random() - 0.5) * (BD - 1.5);
     tmpV.set(lx, -0.1, lz); blade.localToWorld(tmpV);
     pPos[i * 3] = tmpV.x; pPos[i * 3 + 1] = tmpV.y; pPos[i * 3 + 2] = tmpV.z;
     pVel[i * 3] = SC.vx * 0.3 + (Math.random() - 0.5) * 2; pVel[i * 3 + 1] = -2 - Math.random() * 3; pVel[i * 3 + 2] = SC.vz * 0.3 + (Math.random() - 0.5) * 2;
@@ -573,21 +575,29 @@ function tongTip() { return [SC.px + TONG_Z * Math.sin(YAW), SC.pz + TONG_Z * Ma
 function tongsGrab() {
   if (SC.held.length) { DISP.msg = '手上还夹着一坨，先倒掉'; return; }
   const [wx, wz] = tongTip();
-  let best = null, bd = 1e9;
+  let best = null, from = null, bd = 1e9;
   for (const c of clumps) {
     if (c.stick > 0) continue;                                  /* 黏死在盆底的夹不动 */
     const top = c.buried ? c.y0 + c.r * 0.6 : c.mesh.position.y + c.r * 0.5;
     if (SC.floor > top + 0.8) continue;                         /* 钳口得探到它那个深度 */
     const d = Math.hypot(c.x - wx, c.z - wz);
-    if (d < c.r + 2.4 && d < bd) { bd = d; best = c; }
+    if (d < c.r + 2.4 && d < bd) { bd = d; best = c; from = 'clumps'; }
+  }
+  for (const c of loose) {                                      /* 地上散落的也能夹 */
+    const d = Math.hypot(c.holder.position.x - wx, c.holder.position.z - wz);
+    if (d < c.r + 2.4 && d < bd) { bd = d; best = c; from = 'loose'; }
   }
   if (!best) { DISP.msg = '夹空了'; return; }
-  const c = best; clumps.splice(clumps.indexOf(c), 1); clumpGroup.remove(c.mesh);
-  const holder = new THREE.Group(); c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); holder.add(c.mesh);
+  const c = best; let holder;
+  if (from === 'loose') { loose.splice(loose.indexOf(c), 1); holder = c.holder; scene.remove(holder); holder.rotation.set(0, 0, 0); }
+  else {
+    clumps.splice(clumps.indexOf(c), 1); clumpGroup.remove(c.mesh);
+    holder = new THREE.Group(); c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); holder.add(c.mesh);
+  }
   holder.position.set(0, 0.25 + c.r * 0.55, TONG_Z); blade.add(holder);
   c.holder = holder; c.p = null;                                /* p=null → updateHeld 跳过：夹住的不会在铲面上滚 */
   SC.held.push(c); SC.last = POOP_TYPES[c.type].name; DISP.msg = `夹起来了（${SC.last}）`;
-  if (POOP_TYPES[c.type].stain) stainAt(c.x, c.z, c.r * 1.5, 0.3);
+  if (from === 'clumps' && POOP_TYPES[c.type].stain) stainAt(c.x, c.z, c.r * 1.5, 0.3);
 }
 function tongsRelease() { /* 松开钳口，东西自己掉下去 */
   for (let k = SC.held.length - 1; k >= 0; k--) {
@@ -603,7 +613,7 @@ function updateScoop(dt) {
   scoop.visible = true;
   if (DUMP.on) { /* 倒的过程接管铲子，鼠标先别管 */
     dumpStep(dt);
-    if (jawL) { jawL.rotation.z = tongOpen * 0.34; jawR.rotation.z = -tongOpen * 0.34; }
+    if (jawL) { jawL.rotation.z = -tongOpen * 0.34; jawR.rotation.z = tongOpen * 0.34; }
     SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 飞过去的路上也别蹭到容器 */
     scoop.position.set(SC.px, SC.y, SC.pz);
     blade.rotation.x = SC.tilt;
@@ -642,12 +652,14 @@ function updateScoop(dt) {
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && outsideAll) { /* 地上铲：贴地，捡散落的 */
     SC.state = 'floor'; SC.y += (0.9 - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.12 - SC.tilt) * Math.min(1, dt * 8);
-    if (!SC.digCaught) for (let k = loose.length - 1; k >= 0; k--) { const c = loose[k]; const [lx, lz] = toLocal(c.holder.position.x, c.holder.position.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; loose.splice(k, 1); scene.remove(c.holder); blade.add(c.holder); c.yOff = 0.35 + c.r * 0.3; c.holder.position.set(lx, bladeFloorY(lz) + c.yOff, lz); c.holder.rotation.set(0, 0, 0); c.p = { x: lx, z: lz, vx: 0, vz: 0 }; SC.held.push(c); SC.digCaught = true; SC.last = POOP_TYPES[c.type].name; DISP.msg = '从地上铲起来了'; break; }
+    /* 夹子走自己的 tongsGrab（它会连地上的一起找），不能走铲子这套：
+       会给夹住的东西设 c.p，然后 updateHeld 把它摆在一个根本不存在的铲面上悬空 */
+    if (!SC.digCaught && !SK().tongs) for (let k = loose.length - 1; k >= 0; k--) { const c = loose[k]; const [lx, lz] = toLocal(c.holder.position.x, c.holder.position.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; loose.splice(k, 1); scene.remove(c.holder); blade.add(c.holder); c.yOff = 0.35 + c.r * 0.3; c.holder.position.set(lx, bladeFloorY(lz) + c.yOff, lz); c.holder.rotation.set(0, 0, 0); c.p = { x: lx, z: lz, vx: 0, vz: 0 }; SC.held.push(c); SC.digCaught = true; SC.last = POOP_TYPES[c.type].name; DISP.msg = '从地上铲起来了'; break; }
   } else if (pressing && inside) {
     /* 从当前高度开始往下扎：入砂前落得快，入砂后砂有阻力、铲上越满越沉不动，一直按住就一路沉到盆底 */
     if (SC.state !== 'dig') { SC.state = 'dig'; SC.floor = Math.max(hs, SC.y - 0.3); SC.hitBottom = false; }
     const above = SC.floor > hs + 0.2;
-    SC.floor = Math.max(0.12, SC.floor - SINK_RATE * (above ? 2.2 : 1 - 0.45 * (SC.V / V_CAP)) * dt);
+    SC.floor = Math.max(0.12, SC.floor - SINK_RATE * (above ? 2.2 : 1 - 0.45 * (SC.V / (V_CAP * (SK().cap || 1)))) * dt);
     const tTilt = -0.28 - SC.steep * 0.95; /* 越靠墙越竖，最多约 70° */
     /* SC.y 就是铲口高度（blade.position.y 已经把绕前沿转的位移抵掉了），别再加一次 sin 补偿 */
     SC.y += ((SC.floor + 0.3) - SC.y) * Math.min(1, dt * 14); SC.tilt += (tTilt - SC.tilt) * Math.min(1, dt * 8);
@@ -664,12 +676,12 @@ function updateScoop(dt) {
     /* 筛砂：铲起来是满满一铲（砂+结块+屎），端着不动几乎不漏，得左右晃着筛，松砂才从钢丝缝里掉下去，屎和结块留在条上 */
     const LK = litter.leak * SK().leak;
     if (SC.V > 0.5 && LK > 0) { const rate = LK * (0.05 + 5.5 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.08 * dt * LK); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); } /* 粒数上限太低会让单粒砂量过大，落点戳出一根针 */
-    const capNow = V_CAP * SK().cap;
-    if (SC.V > capNow * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = LK > 0 ? '满满一铲，左右晃一晃把猫砂筛下去' : '全封铲不漏砂 —— 这一铲砂只能跟着一起倒掉'; siftT = 2.2; } } else if (SC.V < capNow * 0.08) siftT = 0.8;
+    const capNow = V_CAP * SK().cap; /* 夹子 cap=0：阈值会恒真、siftT 永不复位还刷错文案，直接不进这段 */
+    if (capNow > 0 && SC.V > capNow * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = LK > 0 ? '满满一铲，左右晃一晃把猫砂筛下去' : '全封铲不漏砂 —— 这一铲砂只能跟着一起倒掉'; siftT = 2.2; } } else if (SC.V < capNow * 0.08) siftT = 0.8;
   }
   SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 兜底：按住往下沉时也不许沉进容器里 */
   /* 钳口开合：按住下探时张开，松手夹住时合上（夹着东西也保持微张，看得出咬住了） */
-  if (jawL) { const want = SK().tongs && SC.state === 'dig' ? 1 : (SC.held.length ? 0.28 : 0.12); tongOpen += (want - tongOpen) * Math.min(1, dt * 12); jawL.rotation.z = tongOpen * 0.34; jawR.rotation.z = -tongOpen * 0.34; }
+  if (jawL) { const want = SK().tongs && SC.state === 'dig' ? 1 : (SC.held.length ? 0.28 : 0.12); tongOpen += (want - tongOpen) * Math.min(1, dt * 12); jawL.rotation.z = -tongOpen * 0.34; jawR.rotation.z = tongOpen * 0.34; }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
   blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
   const fill = Math.min(1, SC.V / (V_CAP * (SK().cap || 1))); pile.visible = fill > 0.01 && !SK().tongs; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
@@ -954,7 +966,8 @@ cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, 
 document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; rMat.color.set(litter.color).multiplyScalar(0.92); rMat.size = litter.pSize; resetSand(); buildPellets(); buildHeap(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
 document.querySelectorAll('[data-scoop]').forEach(b => b.onclick = () => {
   document.querySelectorAll('[data-scoop]').forEach(x => x.classList.toggle('on', x === b));
-  for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; /* 换工具＝换一把新的，手上的先放下 */
+  /* 换工具＝换一把新的：手上的东西要真的掉下去，不能直接从场景图摘掉（那是凭空消失，还漏引用） */
+  DUMP.on = false; tongsRelease(); SC.V = 0;
   scoopKind = b.dataset.scoop; tongOpen = 0; buildRig();
   if (tool !== 'scoop') { tool = 'scoop'; document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x.dataset.tool === 'scoop')); }
   DISP.msg = SK().tongs ? '按住下探，松手就夹' : SK().leak === 0 ? '全封铲：一点砂都不漏' : SK().name;
