@@ -495,7 +495,8 @@ function scoopDig(dt) {
     if (c.buried && litter.clumping && !c.wasStuck) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
     else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
     else { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); if (T.stain) stainAt(c.x, c.z, c.r * 1.6, 0.35); }
-    holder.position.set(lx + (Math.random() - 0.5), 0.35 + c.r * (c.wasStuck ? 0.4 : c.buried ? 0.8 : 0.3), lz); /* 扁饼比砂球薄，按饼厚放，别飘在钢丝上方 */ blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
+    c.yOff = 0.35 + c.r * (c.wasStuck ? 0.4 : c.buried ? 0.8 : 0.3); /* 扁饼比砂球薄，按饼厚放，别飘在钢丝上方 */
+    holder.position.set(lx + (Math.random() - 0.5), bladeFloorY(lz) + c.yOff, lz); blade.add(holder); c.holder = holder; c.p = { x: holder.position.x, z: lz, vx: 0, vz: 0 }; SC.held.push(c);
     SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
   }
 }
@@ -523,6 +524,7 @@ function updateScoop(dt) {
   scoop.visible = true;
   if (DUMP.on) { /* 倒的过程接管铲子，鼠标先别管 */
     dumpStep(dt);
+    SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 飞过去的路上也别蹭到容器 */
     scoop.position.set(SC.px, SC.y, SC.pz);
     blade.rotation.x = SC.tilt;
     blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5);
@@ -530,7 +532,9 @@ function updateScoop(dt) {
     return;
   }
   if (!hit) return;
-  const tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
+  let tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
+  /* 马桶水箱是实心的、又高得飞不过去：横向挡在它前面，别让铲子钻进去 */
+  if (Math.abs(tx - toilet.position.x) < 9 && tz < toilet.position.z - 3.5) tz = toilet.position.z - 3.5;
   const nx = SC.px + (tx - SC.px) * Math.min(1, dt * 18), nz = SC.pz + (tz - SC.pz) * Math.min(1, dt * 18);
   SC.vx = (nx - SC.px) / Math.max(dt, 1e-3); SC.vz = (nz - SC.pz) / Math.max(dt, 1e-3); SC.px = nx; SC.pz = nz;
   const outsideAll = Math.abs(SC.px) > TRAY_W / 2 + WALL + 4 || Math.abs(SC.pz) > TRAY_D / 2 + WALL + 4; /* 整把铲在盆外的地上 */
@@ -558,7 +562,7 @@ function updateScoop(dt) {
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && outsideAll) { /* 地上铲：贴地，捡散落的 */
     SC.state = 'floor'; SC.y += (0.9 - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.12 - SC.tilt) * Math.min(1, dt * 8);
-    if (!SC.digCaught) for (let k = loose.length - 1; k >= 0; k--) { const c = loose[k]; const [lx, lz] = toLocal(c.holder.position.x, c.holder.position.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; loose.splice(k, 1); scene.remove(c.holder); blade.add(c.holder); c.holder.position.set(lx, 0.35 + c.r * 0.3, lz); c.holder.rotation.set(0, 0, 0); c.p = { x: lx, z: lz, vx: 0, vz: 0 }; SC.held.push(c); SC.digCaught = true; SC.last = POOP_TYPES[c.type].name; DISP.msg = '从地上铲起来了'; break; }
+    if (!SC.digCaught) for (let k = loose.length - 1; k >= 0; k--) { const c = loose[k]; const [lx, lz] = toLocal(c.holder.position.x, c.holder.position.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; loose.splice(k, 1); scene.remove(c.holder); blade.add(c.holder); c.yOff = 0.35 + c.r * 0.3; c.holder.position.set(lx, bladeFloorY(lz) + c.yOff, lz); c.holder.rotation.set(0, 0, 0); c.p = { x: lx, z: lz, vx: 0, vz: 0 }; SC.held.push(c); SC.digCaught = true; SC.last = POOP_TYPES[c.type].name; DISP.msg = '从地上铲起来了'; break; }
   } else if (pressing && inside) {
     /* 从当前高度开始往下扎：入砂前落得快，入砂后砂有阻力、铲上越满越沉不动，一直按住就一路沉到盆底 */
     if (SC.state !== 'dig') { SC.state = 'dig'; SC.floor = Math.max(hs, SC.y - 0.3); SC.hitBottom = false; }
@@ -573,13 +577,15 @@ function updateScoop(dt) {
   } else {
     SC.state = (SC.V > 1 || SC.held.length) ? 'carry' : 'hover';
     /* 松手就抬回盆口上方：默认铲子是悬在盆之上的，看得见它往下扎的那段行程 */
-    const ty = outsideAll ? 3.5 + (SC.state === 'carry' ? 1 : 0) : HOVER_Y + (SC.state === 'carry' ? 1.5 : 0);
+    /* 悬停高度取三者最高：盆口上方 / 地面 / 袋子马桶顶上 —— 移到容器上方会自己抬起来，不再穿过去 */
+    const ty = Math.max(objClearY(SC.px, SC.pz), outsideAll ? 3.5 + (SC.state === 'carry' ? 1 : 0) : HOVER_Y + (SC.state === 'carry' ? 1.5 : 0));
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.2 : -0.06) - SC.tilt) * Math.min(1, dt * 6); /* 端着自然往后仰，东西靠柄那边 */
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     /* 筛砂：铲起来是满满一铲（砂+结块+屎），端着不动几乎不漏，得左右晃着筛，松砂才从钢丝缝里掉下去，屎和结块留在条上 */
     if (SC.V > 0.5) { const rate = litter.leak * (0.05 + 5.5 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.08 * dt * litter.leak); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); } /* 粒数上限太低会让单粒砂量过大，落点戳出一根针 */
     if (SC.V > V_CAP * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = '满满一铲，左右晃一晃把猫砂筛下去'; siftT = 2.2; } } else if (SC.V < V_CAP * 0.08) siftT = 0.8;
   }
+  SC.y = Math.max(SC.y, objClearY(SC.px, SC.pz)); /* 兜底：按住往下沉时也不许沉进容器里 */
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
   blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
   const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
@@ -619,7 +625,9 @@ function updateHeld(dt) {
     if (q.z > limZ) { q.z = limZ; q.vz *= -0.35; }                       /* 后壁：挡住 */
     else if (q.z < -limZ) { const blocked = SC.state === 'dig';          /* 铲砂时前面被砂堵着 */
       if (!blocked && (Math.abs(q.vz) > 42 || t < -0.95)) off = true; else { q.z = -limZ; q.vz *= -0.3; } }
-    c.holder.position.x = q.x; c.holder.position.z = q.z;
+    /* 铲底是弯的（后半段翘起来成后壁）：屎滑到哪儿，就得坐在那个位置的铲底上。
+       只改 x/z 不改 y 的话，往后滑就会沉到钢丝下面去 —— 屎一律不漏下去 */
+    c.holder.position.x = q.x; c.holder.position.z = q.z; c.holder.position.y = bladeFloorY(q.z) + (c.yOff || 0.9);
     c.holder.rotation.x -= q.vz * dt / Math.max(0.8, c.r); c.holder.rotation.z += q.vx * dt / Math.max(0.8, c.r); /* 滚动 */
     if (off) { /* 掉出去：转成世界坐标自由落体 */
       tmpW.set(q.x, c.holder.position.y, q.z); blade.localToWorld(tmpW);
@@ -652,7 +660,16 @@ function updateFallen(dt) {
 }
 // ---------- 倒进袋子 / 马桶：飞到容器上方 → 翻过去倒 → 东西自己掉进去 ----------
 const BAG_TOP = 8.5 * 1.7, BAG_R = 3.9 * 1.7, TOI_RIM = 9.9 * 2.4, TOI_R = 4.0 * 2.4;
-const DUMP = { on: false, tgt: null, phase: '', t: 0, n: 0 };
+const TANK_TOP = (12.5 + 3.5) * 2.4, TOI_BODY = 11.5, BAG_BODY = 4.6 * 1.7;
+/* 铲子不能穿过袋子和马桶：横向进了它们的范围，就得抬到顶上去（+铲面半宽的余量）。
+   水箱太高（38）飞不过去，改成横向挡住不让钻进去。 */
+function objClearY(px, pz) {
+  let need = 0;
+  if (Math.hypot(px - bag.position.x, pz - bag.position.z) < BAG_BODY + BW * 0.5) need = Math.max(need, BAG_TOP + 3.2);
+  if (Math.hypot(px - toilet.position.x, pz - toilet.position.z) < TOI_BODY + BW * 0.5) need = Math.max(need, TOI_RIM + 3.0);
+  return need;
+}
+const DUMP = { on: false, tgt: null, phase: '', t: 0, had: 0 };
 function startDump(where) { if (DUMP.on) return; DUMP.on = true; DUMP.tgt = where; DUMP.phase = 'to'; DUMP.t = 0; DUMP.had = 0; SC.state = 'carry'; pressing = false; }
 /* SC.state 必须清掉：留在 'dig' 的话 updateHeld 会一直当「前面被砂堵着」，倒的时候一坨都掉不出来 */
 /* 掉落物落进容器口 → 吞掉并记账 */
