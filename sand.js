@@ -356,7 +356,7 @@ function updateLift(dt) {
   if (tool !== 'lift') { TILT.tx = 0; TILT.tz = 0; }
   const k = Math.min(1, dt * 6); const ox = TILT.x, oz = TILT.z;
   TILT.x += (TILT.tx - TILT.x) * k; TILT.z += (TILT.tz - TILT.z) * k;
-  trayGroup.rotation.set(TILT.x, 0, TILT.z); trayGroup.position.y = tool === 'lift' ? 6 : 0;
+  trayGroup.rotation.set(TILT.x, 0, TILT.z); trayGroup.position.y = tool === "lift" ? 4 : 0;
   if (Math.abs(TILT.x - ox) > 1e-4 || Math.abs(TILT.z - oz) > 1e-4 || (tool === 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) > 0.01)) updateBias();
   if (tool !== 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) < 1e-3 && (ox !== 0 || oz !== 0)) { TILT.x = TILT.z = 0; updateBias(); }
 }
@@ -384,7 +384,7 @@ cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick
   if (tool === 'lift') { pressing = true; liftStart = { x: e.clientX, y: e.clientY, tx: TILT.tx, tz: TILT.tz }; cv.setPointerCapture(e.pointerId); return; }
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
 let liftStart = null;
-cv.addEventListener('pointermove', e => { hit = pick(e); if (tool === 'lift' && pressing && liftStart) { TILT.tz = Math.max(-0.9, Math.min(0.9, liftStart.tz - (e.clientX - liftStart.x) / 220)); TILT.tx = Math.max(-0.9, Math.min(0.9, liftStart.tx + (e.clientY - liftStart.y) / 220)); } });
+cv.addEventListener('pointermove', e => { hit = pick(e); if (tool === 'lift' && pressing && liftStart) { TILT.tz = Math.max(-0.7, Math.min(0.7, liftStart.tz - (e.clientX - liftStart.x) / 260)); TILT.tx = Math.max(-0.7, Math.min(0.7, liftStart.tx + (e.clientY - liftStart.y) / 260)); } });
 cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig') SC.state = 'carry'; });
 cv.addEventListener('pointercancel', () => { pressing = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
