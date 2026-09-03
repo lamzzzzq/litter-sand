@@ -26,10 +26,14 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2a2118);
 const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 500);
-camera.position.set(14, 74, 56);
+/* 默认游玩视角（由用户选定的那张截图反解：三个物体的屏幕位置拟合出来的，
+   仰角 32°、距离 110，盆偏左、马桶右上、袋子右下，三样都在画面内；
+   target 取视线上离场景中心最近的点，转视角时支点正好在画面中央 */
+const HOME_POS = new THREE.Vector3(14.5, 75.6, 85.2), HOME_TGT = new THREE.Vector3(7.3, 18.1, -7.9);
+camera.position.copy(HOME_POS);
 const controls = new OrbitControls(camera, cv);
-controls.target.set(12, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
-controls.minDistance = 25; controls.maxDistance = 160; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
+controls.target.copy(HOME_TGT); controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.minDistance = 25; controls.maxDistance = 175; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
 controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
 controls.update();
@@ -864,6 +868,7 @@ document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); fo
 document.getElementById('bury').onclick = () => { buryByCat(1); };
 document.getElementById('cat').onchange = e => { cat = CATS[e.target.value]; };
 document.getElementById('flat').onclick = flattenAll;
+document.getElementById('home').onclick = () => { camera.position.copy(HOME_POS); controls.target.copy(HOME_TGT); controls.update(); };
 window.addEventListener('keydown', e => { if (e.shiftKey) tool = 'pour'; });
 window.addEventListener('keyup', e => { if (!e.shiftKey && tool === 'pour' && document.querySelector('[data-tool].on').dataset.tool !== 'pour') tool = document.querySelector('[data-tool].on').dataset.tool; });
 
