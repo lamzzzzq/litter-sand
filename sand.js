@@ -833,7 +833,8 @@ function frame(now) {
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
-  frames++; fpsT += dt; if (fpsT >= 1) { document.getElementById('fps').textContent = `${frames} fps · 铲上砂 ${Math.round(SC.V)} · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${DISP.bag} 坨 · 冲走 ${DISP.flushed} · 堵 ${DISP.clogged} 次 · 浪费砂 ${Math.round(SC.wasted)} · 掉地上 ${DISP.dropped}${DISP.msg ? ' · ' + DISP.msg : ''}`; frames = 0; fpsT = 0; }
+  frames++; fpsT += dt; if (fpsT >= 1) { /* 只留 fps + 手上有什么 + 战果 + 当前提示，其余计数是调试用的，收掉 */
+    document.getElementById('fps').textContent = `${frames} fps · 铲上 ${SC.held.length} 坨${SC.last ? '（' + SC.last + '）' : ''} · 袋里 ${DISP.bag} · 冲走 ${DISP.flushed}${DISP.msg ? ' · ' + DISP.msg : ''}`; frames = 0; fpsT = 0; }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
