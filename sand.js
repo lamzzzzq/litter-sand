@@ -70,9 +70,11 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshS
 // ---------- 高度场 ----------
 const h = new Float32Array(N * N), tmp = new Float32Array(N * N), jit = new Float32Array(N * N), bias = new Float32Array(N * N); /* bias：端盆倾斜带来的势能 */
 const TILT = { x: 0, z: 0, tx: 0, tz: 0 };
+const SHAKE = { e: 0 };            /* 晃动能量：倾角变化快就涨，约半秒衰减 */
+let trayY = 0, flowed = 0;         /* flowed：上一帧坍落搬走的总砂量，喂滚砂粒 */
 function updateBias() { const gx = Math.tan(TILT.z), gz = -Math.tan(TILT.x); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const wx = -TRAY_W / 2 + x * CELL; const wz = (row0z < 0 ? -TRAY_D / 2 + y * CELL : TRAY_D / 2 - y * CELL); bias[gi(x, y)] = wx * gx + wz * gz; } }
 const gi = (ix, iy) => iy * N + ix;
-function resetSand() { for (let i = 0; i < h.length; i++) { h[i] = BASE_H + (Math.random() - 0.5) * 0.12; jit[i] = 0.9 + 0.2 * Math.random(); } if (typeof clearClumps === 'function') clearClumps(); dirty = true; }
+function resetSand() { for (let i = 0; i < h.length; i++) { h[i] = BASE_H + (Math.random() - 0.5) * 0.12; jit[i] = 0.9 + 0.2 * Math.random(); } if (typeof clearClumps === 'function') clearClumps(); killRolls(); /* 不清的话，飞着的滚砂粒会把重置前借的砂还进新砂面 */ dirty = true; }
 
 // 颗粒法线贴图：噪声高度 → 法线，按砂种粗细缩放
 function grainNormalTexture(scale) {
@@ -181,13 +183,26 @@ function pushGeometry() {
 }
 // 世界坐标 → 格子
 function worldToGrid(x, z) { const ix = (x + TRAY_W / 2) / TRAY_W * (N - 1); let iy = (z + TRAY_D / 2) / TRAY_D * (N - 1); if (row0z > 0) iy = (N - 1) - iy; return [ix, iy]; }
+// 盆坐标系里的砂面高度 / 有效坡度（含倾斜势 bias），给滚砂粒、滑屎用
+function hAt(lx, lz) { const [gx, gy] = worldToGrid(lx, lz); return h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))]; }
+function gradAt(lx, lz) {
+  const [gx, gy] = worldToGrid(lx, lz); const x = Math.max(1, Math.min(N - 2, Math.round(gx))), y = Math.max(1, Math.min(N - 2, Math.round(gy))); const i = gi(x, y);
+  const sx = ((h[i + 1] + bias[i + 1]) - (h[i - 1] + bias[i - 1])) / (2 * CELL);
+  const sz = ((h[i + N] + bias[i + N]) - (h[i - N] + bias[i - N])) / (2 * (TRAY_D / (N - 1))) * (row0z > 0 ? -1 : 1); /* z 向格距 ≠ CELL（盆不是正方形） */
+  return [sx, sz];
+}
 
 // ---------- 砂的物理 ----------
 // 休止角坍落：八邻居（对角线距离 √2 格），相邻高差超过 tan(角)·距离 的部分按 slumpK 往低处流，带一点随机让堆变圆。每帧 2 遍。[调]
 const NB = [[1, 0, 1], [0, 1, 1], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2]];
 function slump(iter = 2) {
-  const jostle = Math.min(1, (Math.abs(TILT.x) + Math.abs(TILT.z)) * 1.6); /* 端着盆晃，砂松动，休止角降到六成 */
-  const T0 = Math.tan(litter.talus * (1 - 0.4 * jostle) * Math.PI / 180) * CELL, k = litter.slumpK * (1 + jostle);
+  /* 端在手上的砂是松的：倾角 + 晃动一起把休止角往下压（最低压到三成），流量同步放大。
+     不端盆时维持原表现。倾过 ~15° 或快速晃，砂才开始成片滑 —— 小倾角端稳了不流。 */
+  const lifting = tool === 'lift', tiltMag = Math.abs(TILT.x) + Math.abs(TILT.z);
+  const jostle = lifting ? Math.min(1, tiltMag * 2.0 + SHAKE.e * 2.5) : Math.min(1, tiltMag * 1.6);
+  const drop = lifting ? 0.7 : 0.4;
+  const T0 = Math.tan(litter.talus * (1 - drop * jostle) * Math.PI / 180) * CELL;
+  const k = Math.min(0.9, litter.slumpK * (1 + jostle * (lifting ? 2.2 : 1))); /* 上限压回历史安全值，防棋盘抖纹 */
   let moved = 0;
   for (let it = 0; it < iter; it++) {
     tmp.fill(0);
@@ -203,6 +218,7 @@ function slump(iter = 2) {
     for (let i = 0; i < h.length; i++) { if (tmp[i] !== 0) { h[i] += tmp[i]; moved += Math.abs(tmp[i]); if (h[i] < 0) h[i] = 0; } }
     if (moved < 1e-4) break;
   }
+  flowed = moved;
   if (moved > 1e-3) dirty = true;
 }
 function settle(k = 0.02) { for (let y = 1; y < N - 1; y++) for (let x = 1; x < N - 1; x++) { const i = gi(x, y); tmp[i] = (h[i - 1] + h[i + 1] + h[i - N] + h[i + N]) * 0.25 - h[i]; } for (let y = 1; y < N - 1; y++) for (let x = 1; x < N - 1; x++) { const i = gi(x, y); if (Math.abs(tmp[i]) > 0.004) { h[i] += tmp[i] * k; dirty = true; } } }
@@ -352,13 +368,77 @@ function dumpTo(where) {
   else if (!litter.flushable && (v > 250 || n)) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
   else { DISP.flushed += n; DISP.flushT = 1.4; DISP.msg = n ? `冲走 ${n} 坨` : '冲了一下'; }
 }
+// ---------- 端盆滚砂粒：挂在 trayGroup 下，在盆坐标系里顺坡滚 ----------
+const RMAX = 1600;
+const rPos = new Float32Array(RMAX * 3), rVel = new Float32Array(RMAX * 3), rLife = new Float32Array(RMAX), rAmt = new Float32Array(RMAX); let rHead = 0;
+for (let i = 0; i < RMAX; i++) rPos[i * 3 + 1] = -100;
+const rGeo = new THREE.BufferGeometry(); rGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
+const rMat = new THREE.PointsMaterial({ color: new THREE.Color(litter.color).multiplyScalar(0.92), size: litter.pSize, sizeAttenuation: true, transparent: true, opacity: 0.95, toneMapped: false, depthWrite: false });
+const rolls = new THREE.Points(rGeo, rMat); rolls.frustumCulled = false; trayGroup.add(rolls);
+function killRolls() { for (let i = 0; i < RMAX; i++) { rLife[i] = 0; rPos[i * 3 + 1] = -100; } rGeo.attributes.position.needsUpdate = true; }
+function updateRolls(dt) {
+  const lifting = tool === 'lift';
+  const drive = Math.min(1, (Math.abs(TILT.x) + Math.abs(TILT.z)) * 1.8 + SHAKE.e * 2.2);
+  // 生成：砂在坍落（flowed）且盆在动，才从坡上撒粒；借的砂记账，落定还回去
+  if (lifting && drive > 0.18 && flowed > 0.02) {
+    const n = Math.min(30, Math.round(3 + drive * 26));
+    for (let s = 0; s < n; s++) {
+      const lx = (Math.random() - 0.5) * (TRAY_W - 3), lz = (Math.random() - 0.5) * (TRAY_D - 3);
+      const [sx, sz] = gradAt(lx, lz); if (Math.hypot(sx, sz) < 0.22) continue; /* 平的地方不滚 */
+      const i = rHead; rHead = (rHead + 1) % RMAX;
+      if (rLife[i] > 0) { const px = rPos[i * 3], pz = rPos[i * 3 + 2]; const [ggx, ggy] = worldToGrid(px, pz); h[gi(Math.round(ggx), Math.round(ggy))] += rAmt[i]; } /* 被顶掉的旧粒先还砂 */
+      const [ggx, ggy] = worldToGrid(lx, lz); const ci = gi(Math.round(ggx), Math.round(ggy));
+      const a = Math.min(h[ci], 0.05); h[ci] -= a; rAmt[i] = a; dirty = true;
+      rPos[i * 3] = lx; rPos[i * 3 + 1] = hAt(lx, lz) + 0.15; rPos[i * 3 + 2] = lz;
+      rVel[i * 3] = -sx * 6 + (Math.random() - 0.5) * 3; rVel[i * 3 + 2] = -sz * 6 + (Math.random() - 0.5) * 3;
+      rLife[i] = 0.8 + Math.random() * 1.2;
+    }
+  }
+  let any = false; const damp = Math.pow(0.22, dt);
+  for (let i = 0; i < RMAX; i++) {
+    if (rLife[i] <= 0) continue; any = true;
+    let x = rPos[i * 3], z = rPos[i * 3 + 2];
+    const [sx, sz] = gradAt(x, z);
+    rVel[i * 3] = (rVel[i * 3] - sx * 150 * dt) * damp;
+    rVel[i * 3 + 2] = (rVel[i * 3 + 2] - sz * 150 * dt) * damp;
+    x = Math.max(-TRAY_W / 2 + 0.6, Math.min(TRAY_W / 2 - 0.6, x + rVel[i * 3] * dt));
+    z = Math.max(-TRAY_D / 2 + 0.6, Math.min(TRAY_D / 2 - 0.6, z + rVel[i * 3 + 2] * dt));
+    rPos[i * 3] = x; rPos[i * 3 + 2] = z; rPos[i * 3 + 1] = hAt(x, z) + 0.1 + Math.random() * 0.08;
+    rLife[i] -= dt;
+    const slow = Math.hypot(rVel[i * 3], rVel[i * 3 + 2]) < 2.5 && Math.hypot(sx, sz) < 0.3;
+    if (rLife[i] <= 0 || slow || !lifting) { /* 落定：把借的砂还到落点 */
+      const [ggx, ggy] = worldToGrid(x, z); h[gi(Math.round(ggx), Math.round(ggy))] += rAmt[i]; dirty = true;
+      rLife[i] = 0; rPos[i * 3 + 1] = -100;
+    }
+  }
+  if (any) rGeo.attributes.position.needsUpdate = true;
+}
+// 没埋的屎跟着坡往低处滑（埋着的结在砂里不动）
+function slideClumps(dt) {
+  if (tool !== 'lift') return;
+  const go = Math.max(0, Math.abs(TILT.x) + Math.abs(TILT.z) - 0.12) * (1 + SHAKE.e * 1.5); if (go <= 0) return;
+  const dxw = -Math.tan(TILT.z), dzw = Math.tan(TILT.x); /* bias 的负梯度 = 下坡方向 */
+  for (const c of clumps) {
+    if (c.buried) continue;
+    c.x = Math.max(-TRAY_W / 2 + c.r + 1, Math.min(TRAY_W / 2 - c.r - 1, c.x + dxw * go * 24 * dt));
+    c.z = Math.max(-TRAY_D / 2 + c.r + 1, Math.min(TRAY_D / 2 - c.r - 1, c.z + dzw * go * 24 * dt));
+    c.mesh.position.x = c.x; c.mesh.position.z = c.z; c.mesh.rotation.y += go * dt * 3;
+  }
+}
 function updateLift(dt) {
   if (tool !== 'lift') { TILT.tx = 0; TILT.tz = 0; }
   const k = Math.min(1, dt * 6); const ox = TILT.x, oz = TILT.z;
   TILT.x += (TILT.tx - TILT.x) * k; TILT.z += (TILT.tz - TILT.z) * k;
-  trayGroup.rotation.set(TILT.x, 0, TILT.z); trayGroup.position.y = tool === "lift" ? 4 : 0;
+  /* 晃动能量：注入 ∝ 每帧倾角变化（帧率无关），指数衰减。快速来回摇 → 砂被抖松 */
+  SHAKE.e = Math.min(1, SHAKE.e * Math.pow(0.03, dt) + (Math.abs(TILT.x - ox) + Math.abs(TILT.z - oz)) * 8);
+  trayY += ((tool === 'lift' ? 4 : 0) - trayY) * Math.min(1, dt * 5);
+  /* 端在手上不是台钳：晃动往盆体传一点高频颤 */
+  const t = performance.now() / 1000, wob = tool === 'lift' ? SHAKE.e * 0.014 : 0;
+  trayGroup.rotation.set(TILT.x + Math.sin(t * 31) * wob, 0, TILT.z + Math.sin(t * 26 + 1.7) * wob);
+  trayGroup.position.y = trayY;
   if (Math.abs(TILT.x - ox) > 1e-4 || Math.abs(TILT.z - oz) > 1e-4 || (tool === 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) > 0.01)) updateBias();
   if (tool !== 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) < 1e-3 && (ox !== 0 || oz !== 0)) { TILT.x = TILT.z = 0; updateBias(); }
+  slideClumps(dt);
 }
 function updateDispose(dt) {
   if (DISP.flushT > 0) { DISP.flushT -= dt; water.rotation.z += dt * 9; water.scale.setScalar(0.55 + Math.abs(Math.sin(DISP.flushT * 4)) * 0.45); water.material.color.set(0xbfe0f0); }
@@ -393,7 +473,7 @@ const ringGeo = new THREE.RingGeometry(0.9, 1, 48); ringGeo.rotateX(-Math.PI / 2
 cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false })); cursor.renderOrder = 10; scene.add(cursor);
 
 // UI
-document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
+document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; rMat.color.set(litter.color).multiplyScalar(0.92); rMat.size = litter.pSize; resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
 document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; };
@@ -413,10 +493,10 @@ window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, con
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit) && tool !== 'scoop' && tool !== 'lift') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
-  slump(2); settle(0.03);
+  slump(tool === 'lift' ? 4 : 2); if (tool !== 'lift') settle(0.03);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
-  updateLift(dt); updateScoop(dt); updateParticles(dt); updateDispose(dt);
+  updateLift(dt); updateRolls(dt); updateScoop(dt); updateParticles(dt); updateDispose(dt);
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);
