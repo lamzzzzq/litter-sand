@@ -319,6 +319,14 @@ const scoop = new THREE.Group(); scoop.rotation.y = YAW; scene.add(scoop);
 const gridToWorld = (gx, gy) => [-TRAY_W / 2 + gx * CELL, row0z < 0 ? -TRAY_D / 2 + gy * CELL : TRAY_D / 2 - gy * CELL];
 const toLocal = (wx, wz) => { const dx = wx - SC.px, dz = wz - SC.pz; return [dx * Math.cos(YAW) - dz * Math.sin(YAW), dx * Math.sin(YAW) + dz * Math.cos(YAW)]; };
 const blade = new THREE.Group(); scoop.add(blade);
+// 两点之间生成一根杆：端点对端点，不会像手算 position+rotation 那样对不上
+function rodBetween(a, b, r0, r1, mat, seg = 10) {
+  const dir = new THREE.Vector3().subVectors(b, a), len = dir.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, len, seg), mat);
+  m.position.copy(a).addScaledVector(dir, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  return m;
+}
 {
   const pts = []; const rr = 1.2; const segs = 8;
   const corner = (cx, cz, a0) => { for (let i = 0; i <= segs; i++) { const a = a0 + i / segs * Math.PI / 2; pts.push(new THREE.Vector3(cx + Math.cos(a) * rr, 0, cz + Math.sin(a) * rr)); } };
@@ -326,8 +334,18 @@ const blade = new THREE.Group(); scoop.add(blade);
   const frame = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, true), 120, WIRE, 8, true), wireMat); frame.castShadow = true; blade.add(frame);
   for (let i = 0; i < BARS; i++) { const x = -BW / 2 + (i + 0.5) * (BW / BARS); const bar = new THREE.Mesh(new THREE.CylinderGeometry(WIRE * 0.85, WIRE * 0.85, BD - 0.6, 8), wireMat); bar.rotation.x = Math.PI / 2; bar.position.set(x, 0, 0); bar.castShadow = true; blade.add(bar); }
   const cross = new THREE.Mesh(new THREE.CylinderGeometry(WIRE * 0.8, WIRE * 0.8, BW - 1.2, 8), wireMat); cross.rotation.z = Math.PI / 2; cross.position.set(0, 0.05, BD * 0.22); blade.add(cross);
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(WIRE * 1.1, WIRE * 1.1, 4.5, 10), wireMat); neck.position.set(0, 1.4, BD / 2 + 1.4); neck.rotation.x = -0.75; scoop.add(neck);
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.8, 6.5, 16), gripMat); grip.position.set(0, 4.4, BD / 2 + 4.3); grip.rotation.x = -0.75; grip.castShadow = true; scoop.add(grip);
+  /* 杆：必须挂在 blade 上（挂 scoop 的话铲面一倾斜杆不跟着转，就脱开了），
+     且用两点连接生成，端点对端点焊死，不靠手算 position+rotation 去凑。
+     抬到 ~45°：杆太平的话贴墙下铲时整根会从盆壁里穿出去。 */
+  const P0 = new THREE.Vector3(0, 0.12, BD / 2 - 0.5);   // 焊在铲面后沿上
+  const P1 = new THREE.Vector3(0, 2.6, BD / 2 + 2.2);    // 折弯处（金属→塑料握把）
+  const P2 = new THREE.Vector3(0, 8.4, BD / 2 + 7.4);    // 握把末端
+  const neck = rodBetween(P0, P1, WIRE * 1.15, WIRE * 1.3, wireMat, 10); neck.castShadow = true; blade.add(neck);
+  const grip = rodBetween(P1, P2, 0.62, 0.78, gripMat, 16); grip.castShadow = true; blade.add(grip);
+  const dir = new THREE.Vector3().subVectors(P2, P1).normalize();
+  const ferrule = rodBetween(P1.clone().addScaledVector(dir, -0.55), P1.clone().addScaledVector(dir, 1.1), 0.5, 0.62, wireMat, 14); blade.add(ferrule); /* 接头套管，盖住金属杆插进握把的那一截 */
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.78, 14, 10), gripMat); cap.position.copy(P2); cap.scale.y = 0.7; cap.castShadow = true; blade.add(cap);
+  const hole = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.16, 8, 18), gripMat); hole.position.copy(P2).addScaledVector(dir, 0.55); hole.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir); blade.add(hole); /* 挂钩孔 */
 }
 const pileGeo = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2); { const p = pileGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k, p.getY(i), p.getZ(i) * k); } pileGeo.computeVertexNormals(); }
 const pileMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) });
@@ -401,7 +419,9 @@ function updateParticles(dt) {
     pVel[i * 3 + 1] -= 60 * dt;
     const x = pPos[i * 3] += pVel[i * 3] * dt, y = pPos[i * 3 + 1] += pVel[i * 3 + 1] * dt, z = pPos[i * 3 + 2] += pVel[i * 3 + 2] * dt;
     if (Math.abs(x) <= TRAY_W / 2 && Math.abs(z) <= TRAY_D / 2) { const [gx, gy] = worldToGrid(x, z); const ci = gi(Math.round(gx), Math.round(gy)); if (y <= h[ci] + 0.12) { if (litter.bounce > 0 && pVel[i * 3 + 1] < -7) { pPos[i * 3 + 1] = h[ci] + 0.13; pVel[i * 3 + 1] *= -litter.bounce; pVel[i * 3] += (Math.random() - 0.5) * 6 * litter.bounce; pVel[i * 3 + 2] += (Math.random() - 0.5) * 6 * litter.bounce; continue; } const a = pAmt[i]; const cx = Math.round(gx), cy = Math.round(gy); h[ci] += a * 0.4; if (cx > 0) h[ci - 1] += a * 0.15; if (cx < N - 1) h[ci + 1] += a * 0.15; if (cy > 0) h[ci - N] += a * 0.15; if (cy < N - 1) h[ci + N] += a * 0.15; dirty = true; pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } }
-    else if (y <= -0.9) { pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; }
+    else if (y <= -0.9
+      || (y < TOI_RIM && Math.hypot(x - toilet.position.x, z - toilet.position.z) < TOI_R)
+      || (y < BAG_TOP && Math.hypot(x - bag.position.x, z - bag.position.z) < BAG_R)) { pAlive[i] = 0; pPos[i * 3 + 1] = -100; continue; } /* 倒进容器里的砂别穿过去 */
   }
   if (any) pGeo.attributes.position.needsUpdate = true;
 }
@@ -447,10 +467,36 @@ function scoopDig(dt) {
     SC.last = T.name; if (T.stain && c.buried) { brush(c.x, c.z, c.r * 1.4, 0.3, (i, a) => { tint[i] = Math.max(0, tint[i] - a); }); }
   }
 }
+// 防穿模兜底：后沿两角和整根杆，只要横向落在盆壁那圈环里，就必须高过翻边；
+// 差多少就把铲口抬多少（连 SC.floor 一起抬，不然会变成悬空削砂）。
+// 正常情况靠 SC.steep 立起来就够了，这里只兜角度不够的余量。
+const WALL_PROBES = [[-BW / 2, 0, BD / 2], [BW / 2, 0, BD / 2], [0, 0.12, BD / 2 - 0.5], [0, 2.6, BD / 2 + 2.2], [0, 5.5, BD / 2 + 4.8], [0, 8.4, BD / 2 + 7.4]];
+function wallClearLift(t) {
+  const ct = Math.cos(t), st = Math.sin(t), cy = Math.cos(YAW), sy = Math.sin(YAW);
+  let need = 0;
+  for (const [lx, py, pz] of WALL_PROBES) {
+    const ly = py * ct - pz * st - st * BD / 2;                 /* blade 绕前沿转 + 位移补偿后的高度 */
+    const lz = py * st + pz * ct + (1 - ct) * BD / 2;
+    const wx = SC.px + lx * cy + lz * sy, wz = SC.pz - lx * sy + lz * cy;
+    const inInner = Math.abs(wx) <= TRAY_W / 2 - 0.3 && Math.abs(wz) <= TRAY_D / 2 - 0.3;
+    const inRing = !inInner && Math.abs(wx) <= TRAY_W / 2 + WALL + 3.4 && Math.abs(wz) <= TRAY_D / 2 + WALL + 3.4;
+    if (inRing) need = Math.max(need, WALL_H + 1.4 - (SC.y + ly)); /* 翻边顶在 WALL_H+0.9 */
+  }
+  return need;
+}
 function scoopDump() { SC.bagClumps += SC.held.length; for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.wasted += SC.V; SC.V = 0; }
 function updateScoop(dt) {
-  if (!hit || tool === 'lift') { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
+  if (tool === 'lift') { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
   if (tool !== 'scoop') return;
+  if (DUMP.on) { /* 倒的过程接管铲子，鼠标先别管 */
+    dumpStep(dt);
+    scoop.position.set(SC.px, SC.y, SC.pz);
+    blade.rotation.x = SC.tilt;
+    blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, (1 - Math.cos(blade.rotation.x)) * BD * 0.5);
+    const f0 = Math.min(1, SC.V / V_CAP); pile.visible = f0 > 0.01; pile.scale.set(BW * 0.42 * (0.55 + f0 * 0.45), 0.6 + f0 * 1.9, BD * 0.42 * (0.55 + f0 * 0.45)); updateHeap(f0);
+    return;
+  }
+  if (!hit) return;
   const tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
   const nx = SC.px + (tx - SC.px) * Math.min(1, dt * 18), nz = SC.pz + (tz - SC.pz) * Math.min(1, dt * 18);
   SC.vx = (nx - SC.px) / Math.max(dt, 1e-3); SC.vz = (nz - SC.pz) / Math.max(dt, 1e-3); SC.px = nx; SC.pz = nz;
@@ -473,7 +519,9 @@ function updateScoop(dt) {
   /* 铲口在盆里 + 铲子中心别整个跑到壁外（不然贴壁时会站在盆沿上隔空削砂、还穿模进壁体） */
   const inside = Math.abs(fx) <= TRAY_W / 2 - 0.6 && Math.abs(fz) <= TRAY_D / 2 - 0.6
     && Math.abs(SC.px) <= TRAY_W / 2 + 0.8 && Math.abs(SC.pz) <= TRAY_D / 2 + 0.8;
-  SC.steep = Math.min(1, overhang / (BD * 0.8));
+  /* 靠墙就立起来：铲口朝内、杆朝墙，越贴墙杆越会撞壁 —— 用角度换深度，
+     站得越竖，杆越是往上翘出盆外，铲面才能贴着壁一直挖到底。near 就是贴壁程度 */
+  SC.steep = Math.min(1, Math.max(overhang / (BD * 0.8), near));
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && outsideAll) { /* 地上铲：贴地，捡散落的 */
     SC.state = 'floor'; SC.y += (0.9 - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.12 - SC.tilt) * Math.min(1, dt * 8);
@@ -486,6 +534,7 @@ function updateScoop(dt) {
     const tTilt = -0.28 - SC.steep * 0.95; /* 越靠墙越竖，最多约 70° */
     /* SC.y 就是铲口高度（blade.position.y 已经把绕前沿转的位移抵掉了），别再加一次 sin 补偿 */
     SC.y += ((SC.floor + 0.3) - SC.y) * Math.min(1, dt * 14); SC.tilt += (tTilt - SC.tilt) * Math.min(1, dt * 8);
+    const lift = wallClearLift(SC.tilt); if (lift > 0) { SC.floor += lift; SC.y += lift; } /* 立起来还不够就抬，别让杆插进盆壁 */
     if (!SC.hitBottom && SC.floor <= 0.2) { SC.hitBottom = true; DISP.msg = '铲到盆底了 —— 横着拉可以刮底'; }
     scoopDig(dt);
   } else {
@@ -555,6 +604,8 @@ function updateFallen(dt) {
       const dirx = (ox > oz ? Math.sign(m.position.x) : 0) * (outward ? 1 : -1), dirz = (oz >= ox ? Math.sign(m.position.z) : 0) * (outward ? 1 : -1);
       f.v.x = dirx * 9 + (Math.random() - 0.5) * 3; f.v.z = dirz * 9 + (Math.random() - 0.5) * 3; f.v.y = 4; m.position.y = WALL_H + f.c.r * 0.4 + 0.05; continue;
     }
+    const sw = swallow(m); /* 掉进袋子/马桶 */
+    if (sw) { fallen.splice(k, 1); scene.remove(m); swallowClump(sw, f.c); continue; }
     if (m.position.y <= ground + f.c.r * 0.3) {
       fallen.splice(k, 1); const c = f.c; scene.remove(m);
       if (inside) { /* 回到砂上：变成一坨露在外面的 */ c.buried = false; c.x = m.position.x; c.z = m.position.z; c.mesh.position.set(0, 0, 0); c.mesh.rotation.set(0, Math.random() * 6.28, 0); if (c.ball) { c.mesh.position.y = 0; } clumpGroup.add(m); m.position.set(c.x, ground, c.z); m.rotation.set(0, 0, 0); c.mesh = m; c.holder = null; clumps.push(c); DISP.msg = '掉回砂上了'; }
@@ -562,12 +613,37 @@ function updateFallen(dt) {
     }
   }
 }
-function dumpTo(where) {
-  const n = SC.held.length, v = SC.V;
-  for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0;
-  if (where === 'bag') { DISP.bag += n; SC.wasted += v; DISP.msg = n ? `${n} 坨进袋${v > 300 ? '，带了不少砂' : ''}` : '倒了一铲砂进袋'; }
-  else if (!litter.flushable && (v > 250 || n)) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
-  else { DISP.flushed += n; DISP.flushT = 1.4; DISP.msg = n ? `冲走 ${n} 坨` : '冲了一下'; }
+// ---------- 倒进袋子 / 马桶：飞到容器上方 → 翻过去倒 → 东西自己掉进去 ----------
+const BAG_TOP = 8.5 * 1.7, BAG_R = 3.9 * 1.7, TOI_RIM = 9.9 * 2.4, TOI_R = 4.0 * 2.4;
+const DUMP = { on: false, tgt: null, phase: '', t: 0, n: 0 };
+function startDump(where) { if (DUMP.on) return; DUMP.on = true; DUMP.tgt = where; DUMP.phase = 'to'; DUMP.t = 0; DUMP.n = 0; }
+/* 掉落物落进容器口 → 吞掉并记账 */
+function swallow(m) {
+  if (Math.hypot(m.position.x - bag.position.x, m.position.z - bag.position.z) < BAG_R && m.position.y < BAG_TOP) return 'bag';
+  if (Math.hypot(m.position.x - toilet.position.x, m.position.z - toilet.position.z) < TOI_R && m.position.y < TOI_RIM) return 'toilet';
+  return null;
+}
+function swallowClump(where, c) {
+  DUMP.n++;
+  if (where === 'bag') { DISP.bag++; DISP.msg = `${POOP_TYPES[c.type].name}进袋了`; }
+  else if (!litter.flushable) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
+  else { DISP.flushed++; DISP.flushT = 1.4; DISP.msg = `冲走了（${POOP_TYPES[c.type].name}）`; }
+}
+function dumpStep(dt) {
+  const toBag = DUMP.tgt === 'bag';
+  const TX = toBag ? bag.position.x : toilet.position.x, TZ = toBag ? bag.position.z : toilet.position.z;
+  const TY = (toBag ? BAG_TOP + 6 : TOI_RIM + 5);          /* 铲子要比容器高，倒的时候东西才掉得下去 */
+  DUMP.t += dt;
+  const k = Math.min(1, dt * 4);
+  SC.px += (TX - SC.px) * k; SC.pz += (TZ - SC.pz) * k; SC.y += (TY - SC.y) * k; SC.vx = 0; SC.vz = 0;
+  if (DUMP.phase === 'to') {
+    SC.tilt += (0.18 - SC.tilt) * Math.min(1, dt * 5);      /* 端平了飞过去，路上别撒 */
+    if (Math.hypot(SC.px - TX, SC.pz - TZ) < 2.5 && Math.abs(SC.y - TY) < 2.5) { DUMP.phase = 'tip'; DUMP.t = 0; }
+  } else if (DUMP.phase === 'tip') {
+    SC.tilt += (-1.55 - SC.tilt) * Math.min(1, dt * 3.2);   /* 慢慢翻过去：屎顺着钢丝滑到前沿，自己掉下去 */
+    if (SC.V > 0.5) { const dV = Math.min(SC.V, SC.V * 7 * dt + 8 * dt); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); SC.wasted += dV; }
+    if ((!SC.held.length && SC.V < 1 && SC.tilt < -1.2) || DUMP.t > 3.5) { DUMP.phase = 'back'; DUMP.t = 0; if (!DUMP.n) DISP.msg = toBag ? '倒了一铲砂进袋' : '冲了一下'; }
+  } else { SC.tilt += (0.12 - SC.tilt) * Math.min(1, dt * 4); if (SC.tilt > -0.05) DUMP.on = false; }
 }
 // ---------- 端盆滚砂粒：挂在 trayGroup 下，在盆坐标系里顺坡滚 ----------
 const RMAX = 1600;
@@ -660,7 +736,7 @@ function pick(e) {
 }
 const inTray = p => p && Math.abs(p.x) <= TRAY_W / 2 && Math.abs(p.z) <= TRAY_D / 2;
 cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick(e);
-  if (tool === 'scoop') { const rect = cv.getBoundingClientRect(); ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1); ray.setFromCamera(ndc, camera); if (SC.V > 1 || SC.held.length) { if (ray.intersectObject(bag, true).length) { dumpTo('bag'); return; } if (ray.intersectObject(toilet, true).length) { dumpTo('toilet'); return; } } }
+  if (tool === 'scoop') { const rect = cv.getBoundingClientRect(); ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1); ray.setFromCamera(ndc, camera); if (SC.V > 1 || SC.held.length) { if (ray.intersectObject(bag, true).length) { startDump('bag'); return; } if (ray.intersectObject(toilet, true).length) { startDump('toilet'); return; } } }
   if (tool === 'scoop') { SC.digCaught = false; pressing = true; cv.setPointerCapture(e.pointerId); return; }
   if (tool === 'lift') { pressing = true; liftStart = { x: e.clientX, y: e.clientY, tx: TILT.tx, tz: TILT.tz }; cv.setPointerCapture(e.pointerId); return; }
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
