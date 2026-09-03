@@ -198,6 +198,7 @@ function slump(iter = 2) {
   }
   if (moved > 1e-3) dirty = true;
 }
+function settle(k = 0.02) { for (let y = 1; y < N - 1; y++) for (let x = 1; x < N - 1; x++) { const i = gi(x, y); tmp[i] = (h[i - 1] + h[i + 1] + h[i - N] + h[i + N]) * 0.25 - h[i]; } for (let y = 1; y < N - 1; y++) for (let x = 1; x < N - 1; x++) { const i = gi(x, y); if (Math.abs(tmp[i]) > 0.004) { h[i] += tmp[i] * k; dirty = true; } } }
 // 软笔刷：高斯衰减
 function brush(cx, cz, r, amt, fn) {
   const [gx, gy] = worldToGrid(cx, cz); const rc = r / CELL, s2 = 2 * (rc * 0.5) * (rc * 0.5);
@@ -246,7 +247,7 @@ const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0
 const PMAX = 4000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pAmt = new Float32Array(PMAX); const pAlive = new Uint8Array(PMAX); let pHead = 0;
 const pGeo = new THREE.BufferGeometry(); pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-const pMat = new THREE.PointsMaterial({ color: litter.color, size: litter.pSize, sizeAttenuation: true, transparent: true, opacity: 0.95 });
+const pMat = new THREE.PointsMaterial({ color: litter.color, size: litter.pSize, sizeAttenuation: true, transparent: true, opacity: 0.95, toneMapped: false, depthWrite: false });
 const points = new THREE.Points(pGeo, pMat); points.frustumCulled = false; scene.add(points);
 for (let i = 0; i < PMAX; i++) pPos[i * 3 + 1] = -100;
 const tmpV = new THREE.Vector3();
@@ -390,7 +391,7 @@ window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, con
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (pressing && inTray(hit) && tool !== 'scoop') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
-  slump(2);
+  slump(2); settle(0.03);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
   updateScoop(dt); updateParticles(dt); updateDispose(dt);
