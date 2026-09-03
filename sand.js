@@ -167,7 +167,13 @@ function bury(x, z, type, depth) {
   clumps.push(c); dirty = true; return c;
 }
 function buryByCat(n = 1) { for (let k = 0; k < n; k++) { const type = pickType(cat); const d = cat.depth[0] + Math.random() * (cat.depth[1] - cat.depth[0]); bury((Math.random() - 0.5) * (TRAY_W - 14), (Math.random() - 0.5) * (TRAY_D - 14), type, d); } }
-function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; tint.fill(0); floorTint.fill(0); }
+function clearClumps() {
+  for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0;
+  /* 地上散落的、空中还在飞的也要清 —— 不清的话 fallen 落地后又会 push 回 clumps */
+  for (const c of loose) scene.remove(c.holder); loose.length = 0;
+  for (const f of fallen) scene.remove(f.c.holder); fallen.length = 0;
+  tint.fill(0); floorTint.fill(0);
+}
 // 埋着的：砂面钳在壳的穹顶之上；没埋的：坐在砂面上
 function updateClumps() {
   for (const c of clumps) {
@@ -409,7 +415,7 @@ function updateHeap(fill) {
   }
   heapMesh.instanceMatrix.needsUpdate = true;
 }
-const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false, steep: 0 };
+const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false, steep: 0 };
 // 漏砂粒子
 const PMAX = 4000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pAmt = new Float32Array(PMAX); const pAlive = new Uint8Array(PMAX); let pHead = 0;
@@ -503,7 +509,7 @@ function wallClearLift(t) {
   let need = 0;
   for (const [lx, py, pz] of WALL_PROBES) {
     const ly = py * ct - pz * st - st * BD / 2;                 /* blade 绕前沿转 + 位移补偿后的高度 */
-    const lz = py * st + pz * ct + (1 - ct) * BD / 2;
+    const lz = py * st + pz * ct - (1 - ct) * BD / 2;
     const wx = SC.px + lx * cy + lz * sy, wz = SC.pz - lx * sy + lz * cy;
     const inInner = Math.abs(wx) <= TRAY_W / 2 - 0.3 && Math.abs(wz) <= TRAY_D / 2 - 0.3;
     const inRing = !inInner && Math.abs(wx) <= TRAY_W / 2 + WALL + 3.4 && Math.abs(wz) <= TRAY_D / 2 + WALL + 3.4;
@@ -511,15 +517,15 @@ function wallClearLift(t) {
   }
   return need;
 }
-function scoopDump() { SC.bagClumps += SC.held.length; for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.wasted += SC.V; SC.V = 0; }
 function updateScoop(dt) {
-  if (tool === 'lift') { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
-  if (tool !== 'scoop') return;
+  if (tool !== 'scoop') { scoop.visible = false; return; }
+  if (!hit && !DUMP.on) { scoop.visible = false; return; } /* 还没动过鼠标：别把铲子摆在盆中央半埋着 */
+  scoop.visible = true;
   if (DUMP.on) { /* 倒的过程接管铲子，鼠标先别管 */
     dumpStep(dt);
     scoop.position.set(SC.px, SC.y, SC.pz);
     blade.rotation.x = SC.tilt;
-    blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, (1 - Math.cos(blade.rotation.x)) * BD * 0.5);
+    blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5);
     const f0 = Math.min(1, SC.V / V_CAP); pile.visible = f0 > 0.01; pile.scale.set(BW * 0.42 * (0.55 + f0 * 0.45), 0.6 + f0 * 1.9, BD * 0.42 * (0.55 + f0 * 0.45)); updateHeap(f0);
     return;
   }
@@ -575,7 +581,7 @@ function updateScoop(dt) {
     if (SC.V > V_CAP * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = '满满一铲，左右晃一晃把猫砂筛下去'; siftT = 2.2; } } else if (SC.V < V_CAP * 0.08) siftT = 0.8;
   }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
-  blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, (1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
+  blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, -(1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
   const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
 }
 // ---------- 丢的地方：垃圾袋 + 马桶 ----------
@@ -617,7 +623,8 @@ function updateHeld(dt) {
     c.holder.rotation.x -= q.vz * dt / Math.max(0.8, c.r); c.holder.rotation.z += q.vx * dt / Math.max(0.8, c.r); /* 滚动 */
     if (off) { /* 掉出去：转成世界坐标自由落体 */
       tmpW.set(q.x, c.holder.position.y, q.z); blade.localToWorld(tmpW);
-      const wv = new THREE.Vector3(q.vx, 0, q.vz).applyAxisAngle(new THREE.Vector3(0, 1, 0), YAW);
+      /* 局部速度要先过铲面倾角再过 yaw：只转 yaw 的话，倒垃圾翻到 89° 时「顺着铲面往下滑」会被当成水平速度甩出去 */
+      const wv = new THREE.Vector3(q.vx, 0, q.vz).applyAxisAngle(new THREE.Vector3(1, 0, 0), t).applyAxisAngle(new THREE.Vector3(0, 1, 0), YAW);
       blade.remove(c.holder); scene.add(c.holder); c.holder.position.copy(tmpW);
       fallen.push({ c, v: wv.add(new THREE.Vector3(SC.vx * 0.3, 1.5, SC.vz * 0.3)) }); SC.held.splice(k, 1); c.p = null; DISP.msg = '掉了一坨';
     }
@@ -646,7 +653,8 @@ function updateFallen(dt) {
 // ---------- 倒进袋子 / 马桶：飞到容器上方 → 翻过去倒 → 东西自己掉进去 ----------
 const BAG_TOP = 8.5 * 1.7, BAG_R = 3.9 * 1.7, TOI_RIM = 9.9 * 2.4, TOI_R = 4.0 * 2.4;
 const DUMP = { on: false, tgt: null, phase: '', t: 0, n: 0 };
-function startDump(where) { if (DUMP.on) return; DUMP.on = true; DUMP.tgt = where; DUMP.phase = 'to'; DUMP.t = 0; DUMP.n = 0; }
+function startDump(where) { if (DUMP.on) return; DUMP.on = true; DUMP.tgt = where; DUMP.phase = 'to'; DUMP.t = 0; DUMP.had = 0; SC.state = 'carry'; pressing = false; }
+/* SC.state 必须清掉：留在 'dig' 的话 updateHeld 会一直当「前面被砂堵着」，倒的时候一坨都掉不出来 */
 /* 掉落物落进容器口 → 吞掉并记账 */
 function swallow(m) {
   if (Math.hypot(m.position.x - bag.position.x, m.position.z - bag.position.z) < BAG_R && m.position.y < BAG_TOP) return 'bag';
@@ -654,7 +662,6 @@ function swallow(m) {
   return null;
 }
 function swallowClump(where, c) {
-  DUMP.n++;
   if (where === 'bag') { DISP.bag++; DISP.msg = `${POOP_TYPES[c.type].name}进袋了`; }
   else if (!litter.flushable) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
   else { DISP.flushed++; DISP.flushT = 1.4; DISP.msg = `冲走了（${POOP_TYPES[c.type].name}）`; }
@@ -668,11 +675,12 @@ function dumpStep(dt) {
   SC.px += (TX - SC.px) * k; SC.pz += (TZ - SC.pz) * k; SC.y += (TY - SC.y) * k; SC.vx = 0; SC.vz = 0;
   if (DUMP.phase === 'to') {
     SC.tilt += (0.18 - SC.tilt) * Math.min(1, dt * 5);      /* 端平了飞过去，路上别撒 */
-    if (Math.hypot(SC.px - TX, SC.pz - TZ) < 2.5 && Math.abs(SC.y - TY) < 2.5) { DUMP.phase = 'tip'; DUMP.t = 0; }
+    if (Math.hypot(SC.px - TX, SC.pz - TZ) < 2.5 && Math.abs(SC.y - TY) < 2.5) { DUMP.phase = 'tip'; DUMP.t = 0; DUMP.had = SC.held.length; }
   } else if (DUMP.phase === 'tip') {
     SC.tilt += (-1.55 - SC.tilt) * Math.min(1, dt * 3.2);   /* 慢慢翻过去：屎顺着钢丝滑到前沿，自己掉下去 */
     if (SC.V > 0.5) { const dV = Math.min(SC.V, SC.V * 7 * dt + 8 * dt); SC.V -= dV; const n = Math.min(240, Math.max(1, Math.round(dV / 1.1))); spawnLeak(n, dV / n); SC.wasted += dV; }
-    if ((!SC.held.length && SC.V < 1 && SC.tilt < -1.2) || DUMP.t > 3.5) { DUMP.phase = 'back'; DUMP.t = 0; if (!DUMP.n) DISP.msg = toBag ? '倒了一铲砂进袋' : '冲了一下'; }
+    if ((!SC.held.length && SC.V < 1 && SC.tilt < -1.2) || DUMP.t > 3.5) { DUMP.phase = 'back'; DUMP.t = 0; if (!DUMP.had) DISP.msg = toBag ? '倒了一铲砂进袋' : '冲了一下'; }
+    /* 用倒之前手上有几坨来判，不能用「已经落进容器几坨」—— 屎还要飞 0.5 秒才落到，那时必然还是 0 */
   } else { SC.tilt += (0.12 - SC.tilt) * Math.min(1, dt * 4); if (SC.tilt > -0.05) DUMP.on = false; }
 }
 // ---------- 端盆滚砂粒：挂在 trayGroup 下，在盆坐标系里顺坡滚 ----------
