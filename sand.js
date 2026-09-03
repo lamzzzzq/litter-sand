@@ -265,7 +265,7 @@ const blade = new THREE.Group(); scoop.add(blade);
 const pileGeo = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2); { const p = pileGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k, p.getY(i), p.getZ(i) * k); } pileGeo.computeVertexNormals(); }
 const pileMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) });
 const pile = new THREE.Mesh(pileGeo, pileMat); pile.castShadow = true; pile.position.y = 0.05; blade.add(pile);
-const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false };
+const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false, steep: 0 };
 // 漏砂粒子
 const PMAX = 4000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pAmt = new Float32Array(PMAX); const pAlive = new Uint8Array(PMAX); let pHead = 0;
@@ -295,7 +295,7 @@ function updateParticles(dt) {
   }
   if (any) pGeo.attributes.position.needsUpdate = true;
 }
-function bladeCells(pad = 0) { const out = []; const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const R = (Math.hypot(BW, BD) / 2 + pad) / CELL; for (let y = Math.max(0, Math.floor(gy0 - R)); y <= Math.min(N - 1, Math.ceil(gy0 + R)); y++) for (let x = Math.max(0, Math.floor(gx0 - R)); x <= Math.min(N - 1, Math.ceil(gx0 + R)); x++) { const [wx, wz] = gridToWorld(x, y); const [lx, lz] = toLocal(wx, wz); const u = lx / (BW / 2 + pad), v = lz / (BD / 2 + pad); if (Math.abs(u) > 1 || Math.abs(v) > 1) continue; if (Math.max(Math.abs(u), Math.abs(v)) > 0.8 && u * u + v * v > 1.1) continue; out.push(gi(x, y)); } return out; }
+function bladeCells(pad = 0) { const out = []; const [gx0, gy0] = worldToGrid(SC.px, SC.pz); const dEff = BD * Math.max(0.3, Math.cos(SC.tilt)); /* 铲面立起来，吃砂的面积变窄 */ const R = (Math.hypot(BW, dEff) / 2 + pad) / CELL; for (let y = Math.max(0, Math.floor(gy0 - R)); y <= Math.min(N - 1, Math.ceil(gy0 + R)); y++) for (let x = Math.max(0, Math.floor(gx0 - R)); x <= Math.min(N - 1, Math.ceil(gx0 + R)); x++) { const [wx, wz] = gridToWorld(x, y); const [lx, lz] = toLocal(wx, wz); const u = lx / (BW / 2 + pad), v = (lz + (BD - dEff) / 2) / (dEff / 2 + pad); /* 以前沿为准往后缩 */ if (Math.abs(u) > 1 || Math.abs(v) > 1) continue; if (Math.max(Math.abs(u), Math.abs(v)) > 0.8 && u * u + v * v > 1.1) continue; out.push(gi(x, y)); } return out; }
 function scoopDig(dt) {
   const cells = bladeCells(); if (!cells.length) return;
   let removed = 0; const room = V_CAP - SC.V;
@@ -328,21 +328,27 @@ function updateScoop(dt) {
   const speed = Math.hypot(SC.vx, SC.vz); SC.shake = SC.shake * 0.85 + Math.min(1, speed / 45) * 0.15;
   const [gx, gy] = worldToGrid(SC.px, SC.pz);
   // 铲面四角任一角压到盆壁或盆外 → 抬到盆沿以上，不能铲（碰撞）
-  SC.overWall = false; for (const [cx, cz] of [[-BW / 2, -BD / 2], [BW / 2, -BD / 2], [-BW / 2, BD / 2], [BW / 2, BD / 2]]) { const wx = SC.px + cx * Math.cos(YAW) + cz * Math.sin(YAW), wz = SC.pz - cx * Math.sin(YAW) + cz * Math.cos(YAW); if (Math.abs(wx) > TRAY_W / 2 - 0.8 || Math.abs(wz) > TRAY_D / 2 - 0.8) { SC.overWall = true; break; } }
-  const inside = !SC.overWall;
+  SC.overWall = false; let overhang = 0;
+  for (const [cx, cz] of [[-BW / 2, -BD / 2], [BW / 2, -BD / 2], [-BW / 2, BD / 2], [BW / 2, BD / 2]]) { const wx = SC.px + cx * Math.cos(YAW) + cz * Math.sin(YAW), wz = SC.pz - cx * Math.sin(YAW) + cz * Math.cos(YAW); const ox = Math.abs(wx) - (TRAY_W / 2 - 0.8), oz = Math.abs(wz) - (TRAY_D / 2 - 0.8); if (ox > 0 || oz > 0) { SC.overWall = true; overhang = Math.max(overhang, ox, oz); } }
+  /* 铲刃前沿中点在盆里就能铲：靠边时铲面立起来往前推 */
+  const fx = SC.px + (-BD / 2 + 1.2) * Math.sin(YAW), fz = SC.pz + (-BD / 2 + 1.2) * Math.cos(YAW);
+  const inside = Math.abs(fx) <= TRAY_W / 2 - 0.6 && Math.abs(fz) <= TRAY_D / 2 - 0.6;
+  SC.steep = Math.min(1, overhang / (BD * 0.8));
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && inside) {
     if (SC.state !== 'dig') { SC.state = 'dig'; SC.floor = hs - DIG_DEPTH; }
-    SC.y += ((SC.floor + 0.3) - SC.y) * Math.min(1, dt * 10); SC.tilt += (-0.28 - SC.tilt) * Math.min(1, dt * 8);
+    const tTilt = -0.28 - SC.steep * 0.95; /* 越靠墙越竖，最多约 70° */
+    SC.y += ((SC.floor + 0.3 + Math.sin(-tTilt) * BD * 0.5) - SC.y) * Math.min(1, dt * 10); SC.tilt += (tTilt - SC.tilt) * Math.min(1, dt * 8);
     scoopDig(dt);
   } else {
     SC.state = (SC.V > 1 || SC.held.length) ? 'carry' : 'hover';
     const ty = SC.overWall ? WALL_H + 3.2 + (SC.state === 'carry' ? 1 : 0) : Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
-    SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.06 : -0.1) - SC.tilt) * Math.min(1, dt * 6);
+    SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.2 : -0.06) - SC.tilt) * Math.min(1, dt * 6); /* 端着自然往后仰，东西靠柄那边 */
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     if (SC.V > 0.5) { const rate = litter.leak * (0.28 + 3.2 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.3 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
   }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
+  blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, (1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
   const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45));
 }
 // ---------- 丢的地方：垃圾袋 + 马桶 ----------
@@ -367,7 +373,7 @@ const fallen = []; const tmpW = new THREE.Vector3();
 let prevVx = 0, prevVz = 0;
 function updateHeld(dt) {
   const ax = (SC.vx - prevVx) / Math.max(dt, 1e-3), az = (SC.vz - prevVz) / Math.max(dt, 1e-3); prevVx = SC.vx; prevVz = SC.vz;
-  const lax = -(ax * Math.cos(YAW) - az * Math.sin(YAW)) * 0.35, laz = -(ax * Math.sin(YAW) + az * Math.cos(YAW)) * 0.35; /* 假力：铲子往前加速，屎往后滑 */
+  const lax = -(ax * Math.cos(YAW) - az * Math.sin(YAW)) * 0.3, laz = -(ax * Math.sin(YAW) + az * Math.cos(YAW)) * 0.22; /* 假力：铲子往前加速，屎往后滑 */
   const t = blade.rotation.x; const gz = 60 * Math.sin(t); /* 铲面倾角带来的滑动加速度（+z 是柄那边） */
   for (let k = SC.held.length - 1; k >= 0; k--) {
     const c = SC.held[k], q = c.p; if (!q) continue;
@@ -375,8 +381,8 @@ function updateHeld(dt) {
     q.vx += (lax - q.vx * grip) * dt; q.vz += (gz + laz - q.vz * grip) * dt;
     q.x += q.vx * dt; q.z += q.vz * dt;
     const limX = BW / 2 - c.r * 0.55, limZ = BD / 2 - c.r * 0.55; let off = false;
-    if (Math.abs(q.x) > limX) { if (Math.abs(q.vx) > 22 || Math.abs(t) > 0.5) off = true; else { q.x = Math.sign(q.x) * limX; q.vx *= -0.35; } }
-    if (Math.abs(q.z) > limZ) { const front = q.z < 0; if (Math.abs(q.vz) > (front ? 14 : 22) || Math.abs(t) > (front ? 0.32 : 0.5)) off = true; else { q.z = Math.sign(q.z) * limZ; q.vz *= -0.35; } }
+    if (Math.abs(q.x) > limX) { if (Math.abs(q.vx) > 34) off = true; else { q.x = Math.sign(q.x) * limX; q.vx *= -0.35; } }
+    if (Math.abs(q.z) > limZ) { const front = q.z < 0; const blocked = front && SC.state === 'dig'; /* 铲砂时前面被砂堵着 */ if (!blocked && (Math.abs(q.vz) > (front ? 42 : 30) || (front ? t < -0.95 : t > 0.75))) off = true; else { q.z = Math.sign(q.z) * limZ; q.vz *= -0.3; } }
     c.holder.position.x = q.x; c.holder.position.z = q.z;
     c.holder.rotation.x -= q.vz * dt / Math.max(0.8, c.r); c.holder.rotation.z += q.vx * dt / Math.max(0.8, c.r); /* 滚动 */
     if (off) { /* 掉出去：转成世界坐标自由落体 */
