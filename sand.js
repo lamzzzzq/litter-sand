@@ -10,10 +10,10 @@ const WALL = 1.6, WALL_H = 9;
 const BASE_H = 5.5;            // 初始砂深 [调]
 const CELL = TRAY_W / (N - 1);
 const LITTERS = {
-  bentonite: { name: '膨润土', color: 0xd4c39c, talus: 34, grain: 1.0, rough: 0.95, slumpK: 0.35, leak: 1.3, clumping: true,  crumble: 0,   flushable: false, bounce: 0,    pSize: 0.34, wet: [0.72, 0.66, 0.58], noFlush: '膨润土遇水膨胀，马桶堵了' },
-  tofu:      { name: '豆腐砂', color: 0xeee5cc, talus: 38, grain: 1.6, rough: 0.9,  slumpK: 0.25, leak: 1.1, clumping: true,  crumble: 0.6, flushable: true,  bounce: 0.1,  pSize: 0.5,  wet: [0.8, 0.74, 0.62], noFlush: '' },
-  crystal:   { name: '水晶砂', color: 0xe4eef2, talus: 30, grain: 2.2, rough: 0.35, slumpK: 0.45, leak: 1.5, clumping: false, crumble: 0,   flushable: false, bounce: 0.55, pSize: 0.7,  wet: [0.98, 0.9, 0.55], noFlush: '水晶砂是硅胶，不溶，只能扔垃圾桶' },
-  pine:      { name: '松木砂', color: 0xc8a672, talus: 36, grain: 1.8, rough: 0.85, slumpK: 0.3,  leak: 0.9, clumping: false, crumble: 0,   flushable: false, bounce: 0.25, pSize: 0.6,  wet: [0.62, 0.5, 0.36], noFlush: '松木砂不能冲，可以堆肥' },
+  bentonite: { name: '膨润土', color: 0xd4c39c, talus: 34, grain: 1.0, rough: 0.95, slumpK: 0.35, leak: 1.3, clumping: true,  crumble: 0,   flushable: false, bounce: 0,    pSize: 0.34, wet: [0.72, 0.66, 0.58], noFlush: '膨润土遇水膨胀，马桶堵了', pel: { kind: 'grain', r: 0.2,  len: 0,   n: 8000 } },
+  tofu:      { name: '豆腐砂', color: 0xeee5cc, talus: 38, grain: 1.6, rough: 0.9,  slumpK: 0.25, leak: 1.1, clumping: true,  crumble: 0.6, flushable: true,  bounce: 0.1,  pSize: 0.5,  wet: [0.8, 0.74, 0.62], noFlush: '', pel: { kind: 'rod', r: 0.19, len: 1.0, n: 5600 } },
+  crystal:   { name: '水晶砂', color: 0xe4eef2, talus: 30, grain: 2.2, rough: 0.35, slumpK: 0.45, leak: 1.5, clumping: false, crumble: 0,   flushable: false, bounce: 0.55, pSize: 0.7,  wet: [0.98, 0.9, 0.55], noFlush: '水晶砂是硅胶，不溶，只能扔垃圾桶', pel: { kind: 'grain', r: 0.3, len: 0, n: 4600 } },
+  pine:      { name: '松木砂', color: 0xc8a672, talus: 36, grain: 1.8, rough: 0.85, slumpK: 0.3,  leak: 0.9, clumping: false, crumble: 0,   flushable: false, bounce: 0.25, pSize: 0.6,  wet: [0.62, 0.5, 0.36], noFlush: '松木砂不能冲，可以堆肥', pel: { kind: 'rod', r: 0.24, len: 1.2, n: 4600 } },
 };
 let litter = LITTERS.bentonite;
 let tool = 'scoop', brushSize = 3;
@@ -203,6 +203,49 @@ function gradAt(lx, lz) {
   return [sx, sz];
 }
 
+// ---------- 表层颗粒 ----------
+// 真砂子是一粒一粒的：高度场 + 法线贴图只能做出「面」，做不出颗粒感。
+// 在砂面上铺一层实例化的真颗粒（豆腐/松木是躺平的短棒，膨润土/水晶是碎粒），
+// x/z 固定、每帧分批把 y 贴到当前砂面上；砂挖光的地方缩到 0，露出盆底。
+const PEL_MAX = 8000;
+const pelX = new Float32Array(PEL_MAX), pelZ = new Float32Array(PEL_MAX), pelYaw = new Float32Array(PEL_MAX), pelTx = new Float32Array(PEL_MAX), pelTz = new Float32Array(PEL_MAX), pelS = new Float32Array(PEL_MAX);
+const pelDummy = new THREE.Object3D(); let pelMesh = null, pelCursor = 0;
+function pelGeometry(L) {
+  if (L.pel.kind === 'rod') { const g = new THREE.CylinderGeometry(L.pel.r, L.pel.r * 0.9, L.pel.len, 6, 1); g.rotateZ(Math.PI / 2); return g; } /* 躺平的短棒 */
+  return new THREE.IcosahedronGeometry(L.pel.r, 0);
+}
+function buildPellets() {
+  if (pelMesh) { trayGroup.remove(pelMesh); pelMesh.geometry.dispose(); pelMesh.material.dispose(); pelMesh.dispose(); }
+  const L = litter, n = Math.min(PEL_MAX, L.pel.n);
+  const mat = new THREE.MeshStandardMaterial({ color: L.color, roughness: L.rough, metalness: 0, flatShading: true });
+  pelMesh = new THREE.InstancedMesh(pelGeometry(L), mat, n);
+  pelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  pelMesh.castShadow = true; pelMesh.receiveShadow = true; pelMesh.frustumCulled = false;
+  trayGroup.add(pelMesh);
+  const col = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    pelX[i] = (Math.random() - 0.5) * (TRAY_W - 0.8); pelZ[i] = (Math.random() - 0.5) * (TRAY_D - 0.8);
+    pelYaw[i] = Math.random() * 6.283; pelTx[i] = (Math.random() - 0.5) * 0.8; pelTz[i] = (Math.random() - 0.5) * 0.8;
+    pelS[i] = 0.75 + Math.random() * 0.5;
+    if (Math.random() < 0.22) pelS[i] *= 0.42;      /* 一小撮细碎的：真盆里总有磨碎的小颗粒和粉 */
+    const k = 0.84 + Math.random() * 0.3; col.setRGB(k, k, k); pelMesh.setColorAt(i, col); /* 每粒深浅不同，堆在一起才不像一块塑料 */
+  }
+  if (pelMesh.instanceColor) pelMesh.instanceColor.needsUpdate = true;
+  pelCursor = 0; for (let k = 0; k < 4; k++) updatePellets(); /* 先铺满，别第一帧全堆在原点 */
+}
+function updatePellets() {
+  if (!pelMesh) return;
+  const n = pelMesh.count, chunk = Math.min(n, 2200);
+  for (let k = 0; k < chunk; k++) {
+    const i = (pelCursor + k) % n, hy = hAt(pelX[i], pelZ[i]);
+    pelDummy.position.set(pelX[i], hy - 0.06, pelZ[i]);
+    pelDummy.rotation.set(pelTx[i], pelYaw[i], pelTz[i]);
+    pelDummy.scale.setScalar(hy < 0.45 ? 0 : pelS[i]);
+    pelDummy.updateMatrix(); pelMesh.setMatrixAt(i, pelDummy.matrix);
+  }
+  pelCursor = (pelCursor + chunk) % n; pelMesh.instanceMatrix.needsUpdate = true;
+}
+
 // ---------- 砂的物理 ----------
 // 休止角坍落：八邻居（对角线距离 √2 格），相邻高差超过 tan(角)·距离 的部分按 slumpK 往低处流，带一点随机让堆变圆。每帧 2 遍。[调]
 const NB = [[1, 0, 1], [0, 1, 1], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2]];
@@ -256,6 +299,7 @@ function flattenAll() { let m = 0; for (let i = 0; i < h.length; i++) m += h[i];
 const BW = 12, BD = 10, BARS = 9, WIRE = 0.16;        // 铲面宽/深、条数、钢丝半径（世界单位≈cm）
 const GAP = BW / BARS - WIRE * 2;                    // 缝宽 ≈1.0：比它小的东西会漏下去
 const DIG_DEPTH = 2.4, DIG_RATE = 8, V_CAP = 2400;   // 铲入深度、速率、铲上砂容量（格高单位）[调]
+let siftT = 0.8;                                     // 「晃一晃筛砂」提示节流
 const wireMat = new THREE.MeshStandardMaterial({ color: 0xdfe3e8, metalness: 0.92, roughness: 0.22 });
 const gripMat = new THREE.MeshStandardMaterial({ color: 0x8e9299, roughness: 0.7 });
 let YAW = 0.55; const YAW_R = 0.55; /* 右手持：铲头朝左前，柄在右下；到盆右侧 1/4 换左手（镜像） */
@@ -278,6 +322,36 @@ const blade = new THREE.Group(); scoop.add(blade);
 const pileGeo = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2); { const p = pileGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k, p.getY(i), p.getZ(i) * k); } pileGeo.computeVertexNormals(); }
 const pileMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) });
 const pile = new THREE.Mesh(pileGeo, pileMat); pile.castShadow = true; pile.position.y = 0.05; blade.add(pile);
+// 铲上那堆也要是一粒一粒的：在半球壳上撒一层颗粒，跟着 fill 一起缩放
+const HEAP = 520;
+const heapU = new Float32Array(HEAP * 3), heapRot = new Float32Array(HEAP * 3), heapS = new Float32Array(HEAP);
+const heapDummy = new THREE.Object3D(); let heapMesh = null;
+function buildHeap() {
+  if (heapMesh) { blade.remove(heapMesh); heapMesh.geometry.dispose(); heapMesh.material.dispose(); heapMesh.dispose(); }
+  heapMesh = new THREE.InstancedMesh(pelGeometry(litter), new THREE.MeshStandardMaterial({ color: litter.color, roughness: litter.rough, flatShading: true }), HEAP);
+  heapMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); heapMesh.castShadow = true; heapMesh.frustumCulled = false; blade.add(heapMesh);
+  const col = new THREE.Color();
+  for (let i = 0; i < HEAP; i++) {
+    // 半球壳上均匀取点，往里收一点让它有厚度
+    const u = Math.random() * 2 - 1, ph = Math.random() * 6.283, rr = Math.sqrt(1 - u * u), rad = 0.62 + Math.random() * 0.38;
+    heapU[i * 3] = rr * Math.cos(ph) * rad; heapU[i * 3 + 1] = Math.abs(u) * rad; heapU[i * 3 + 2] = rr * Math.sin(ph) * rad;
+    heapRot[i * 3] = Math.random() * 6.283; heapRot[i * 3 + 1] = Math.random() * 6.283; heapRot[i * 3 + 2] = Math.random() * 6.283;
+    heapS[i] = 0.7 + Math.random() * 0.55; if (Math.random() < 0.2) heapS[i] *= 0.45;
+    const k = 0.84 + Math.random() * 0.3; col.setRGB(k, k, k); heapMesh.setColorAt(i, col);
+  }
+  if (heapMesh.instanceColor) heapMesh.instanceColor.needsUpdate = true;
+}
+function updateHeap(fill) {
+  if (!heapMesh) return;
+  heapMesh.visible = fill > 0.01; if (!heapMesh.visible) return;
+  const sx = pile.scale.x, sy = pile.scale.y, sz = pile.scale.z;
+  for (let i = 0; i < HEAP; i++) {
+    heapDummy.position.set(heapU[i * 3] * sx, 0.05 + heapU[i * 3 + 1] * sy, heapU[i * 3 + 2] * sz);
+    heapDummy.rotation.set(heapRot[i * 3], heapRot[i * 3 + 1], heapRot[i * 3 + 2]);
+    heapDummy.scale.setScalar(heapS[i]); heapDummy.updateMatrix(); heapMesh.setMatrixAt(i, heapDummy.matrix);
+  }
+  heapMesh.instanceMatrix.needsUpdate = true;
+}
 const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false, steep: 0 };
 // 漏砂粒子
 const PMAX = 4000;
@@ -370,9 +444,9 @@ function updateScoop(dt) {
   const outsideAll = Math.abs(SC.px) > TRAY_W / 2 + WALL + 4 || Math.abs(SC.pz) > TRAY_D / 2 + WALL + 4; /* 整把铲在盆外的地上 */
   // 手：默认右手斜握；到盆右侧 1/4 换左手（带 4 的回差，别在线上抖）
   if (hand > 0 && SC.px > TRAY_W / 4) hand = -1; else if (hand < 0 && SC.px < TRAY_W / 4 - 4) hand = 1;
-  // 贴壁：离哪面壁近，铲头就转过去贴着那面壁下铲（角落取最近的一面；铲头方向 = -(sinYAW, cosYAW)）
+  // 贴壁：背贴着最近那面壁，铲口朝盆中心往里推（靠左壁 → 口朝右；铲口方向 = -(sinYAW, cosYAW)）
   let wYaw = 0, wD = 1e9;
-  for (const [d, y] of [[TRAY_W / 2 - SC.px, -Math.PI / 2], [TRAY_W / 2 + SC.px, Math.PI / 2], [TRAY_D / 2 - SC.pz, Math.PI], [TRAY_D / 2 + SC.pz, 0]]) if (d < wD) { wD = d; wYaw = y; }
+  for (const [d, y] of [[TRAY_W / 2 - SC.px, Math.PI / 2], [TRAY_W / 2 + SC.px, -Math.PI / 2], [TRAY_D / 2 - SC.pz, 0], [TRAY_D / 2 + SC.pz, Math.PI]]) if (d < wD) { wD = d; wYaw = y; }
   const near = outsideAll ? 0 : Math.min(1, Math.max(0, (BD * 0.95 - Math.max(0, wD)) / (BD * 0.75)));
   const yawTarget = angLerp(hand * YAW_R, wYaw + hand * 0.3, near); /* 贴上了也留一点手腕角度，不是垂直机器 */
   YAW = angLerp(YAW, yawTarget, Math.min(1, dt * 7)); scoop.rotation.y = YAW;
@@ -399,11 +473,13 @@ function updateScoop(dt) {
     const ty = outsideAll ? 3.5 + (SC.state === 'carry' ? 1 : 0) : SC.overWall ? WALL_H + 3.2 + (SC.state === 'carry' ? 1 : 0) : Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.2 : -0.06) - SC.tilt) * Math.min(1, dt * 6); /* 端着自然往后仰，东西靠柄那边 */
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
-    if (SC.V > 0.5) { const rate = litter.leak * (0.28 + 3.2 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.3 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
+    /* 筛砂：铲起来是满满一铲（砂+结块+屎），端着不动几乎不漏，得左右晃着筛，松砂才从钢丝缝里掉下去，屎和结块留在条上 */
+    if (SC.V > 0.5) { const rate = litter.leak * (0.05 + 5.5 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.08 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
+    if (SC.V > V_CAP * 0.25 && SC.shake < 0.12) { siftT -= dt; if (siftT <= 0) { DISP.msg = '满满一铲，左右晃一晃把猫砂筛下去'; siftT = 2.2; } } else if (SC.V < V_CAP * 0.08) siftT = 0.8;
   }
   scoop.position.set(SC.px, SC.y, SC.pz); blade.rotation.x = SC.tilt + Math.sin(performance.now() / 40) * SC.shake * 0.05;
   blade.position.set(0, Math.sin(-blade.rotation.x) * BD * 0.5, (1 - Math.cos(blade.rotation.x)) * BD * 0.5); /* 绕前沿转：前沿贴砂，柄抬高 */
-  const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45));
+  const fill = Math.min(1, SC.V / V_CAP); pile.visible = fill > 0.01; pile.scale.set(BW * 0.42 * (0.55 + fill * 0.45), 0.6 + fill * 1.9, BD * 0.42 * (0.55 + fill * 0.45)); updateHeap(fill);
 }
 // ---------- 丢的地方：垃圾袋 + 马桶 ----------
 const bagMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f4f0, roughness: 0.55, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
@@ -577,7 +653,7 @@ const ringGeo = new THREE.RingGeometry(0.9, 1, 48); ringGeo.rotateX(-Math.PI / 2
 cursor = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false })); cursor.renderOrder = 10; scene.add(cursor);
 
 // UI
-document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; rMat.color.set(litter.color).multiplyScalar(0.92); rMat.size = litter.pSize; resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
+document.querySelectorAll('[data-litter]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-litter]').forEach(x => x.classList.toggle('on', x === b)); litter = LITTERS[b.dataset.litter]; sandMat.color.set(litter.color); sandMat.roughness = litter.rough; sandMat.normalMap.dispose(); sandMat.normalMap = grainNormalTexture(litter.grain); sandMat.needsUpdate = true; pileMat.color.set(litter.color); pileMat.normalMap = sandMat.normalMap; pMat.color.set(litter.color); pMat.size = litter.pSize; rMat.color.set(litter.color).multiplyScalar(0.92); rMat.size = litter.pSize; resetSand(); buildPellets(); buildHeap(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; });
 document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); tool = b.dataset.tool; });
 document.getElementById('size').oninput = e => { brushSize = +e.target.value; };
 document.getElementById('reset').onclick = () => { resetSand(); buryByCat(4); for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.V = 0; };
@@ -591,7 +667,7 @@ function resize() { const w = innerWidth, hh = innerHeight; renderer.setSize(w, 
 addEventListener('resize', resize); resize();
 
 // ---------- 主循环 ----------
-resetSand(); buryByCat(4);
+resetSand(); buildPellets(); buildHeap(); buryByCat(4);
 let last = performance.now(), fpsT = 0, frames = 0;
 window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bag, toilet, DISP, loose, fallen, scene, get yaw() { return YAW; }, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
 function frame(now) {
@@ -600,7 +676,7 @@ function frame(now) {
   slump(tool === 'lift' ? 4 : 2); if (tool !== 'lift') settle(0.03);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
-  updateLift(dt); updateRolls(dt); updateScoop(dt); updateHeld(dt); updateFallen(dt); updateParticles(dt); updateDispose(dt);
+  updateLift(dt); updateRolls(dt); updateScoop(dt); updateHeld(dt); updateFallen(dt); updateParticles(dt); updateDispose(dt); updatePellets();
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);

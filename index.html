@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>猫砂盆 · 砂的物理</title>
-<link rel="stylesheet" href="style.css?v=0.8">
+<link rel="stylesheet" href="style.css?v=0.9">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
 </head>
 <body>
 <div id="ui">
   <div class="row">
-    <b>猫砂盆 · 砂</b><span class="sub">v0.8 · 黏在盆底的尿块要贴底反复刮 · 铲头自动转向最近的盆壁贴着下</span>
+    <b>猫砂盆 · 砂</b><span class="sub">v0.9 · 一粒一粒的真颗粒（含细碎小粒）· 铲起来是满满一铲，要晃着筛 · 铲口朝盆中心贴壁下</span>
     <span id="fps" class="sub"></span>
   </div>
   <div class="row">
@@ -31,9 +31,9 @@
     <button data-tool="smooth">抹平</button>
     <span class="lbl">大小</span><input id="size" type="range" min="1" max="8" step="0.5" value="3">
   </div>
-  <div class="row hint">铲：按住拖 = 铲入，一次最多端起一坨，端着可以再铲 · 松开 = 端起（砂从缝里漏，屎卡在条上）· 出盆自动抬高 · 靠近盆壁时铲头自动转向那面壁贴着下 · <b>黏底尿块</b>：结在盆底的尿饼铲不动，要先把砂清到见底，再贴着底快速拉过去刮，刮 4~6 下才松 · 端盆：按住拖 = 左右前后倾，倾过约 15° 砂开始成片滑（能看到砂粒滚），快速来回晃 = 抖松砂，没埋的屎会往低处滑，倾狠了露盆底的尿· 端着点垃圾袋 = 装袋 · 点马桶 = 冲（只有豆腐砂能冲） · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">这只猫再来一坨</button></div>
+  <div class="row hint">铲：按住拖 = 铲入，一次最多端起一坨，端着可以再铲 · 松开 = 端起（砂从缝里漏，屎卡在条上）· 出盆自动抬高 · 靠近盆壁时背贴那面壁、铲口朝盆中心往里推 · <b>筛砂</b>：铲起来是满满一铲（砂+结块+屎），端着不动几乎不漏，左右晃才把松砂筛下去，屎和结块留在钢丝上 · <b>黏底尿块</b>：结在盆底的尿饼铲不动，要先把砂清到见底，再贴着底快速拉过去刮，刮 4~6 下才松 · 端盆：按住拖 = 左右前后倾，倾过约 15° 砂开始成片滑（能看到砂粒滚），快速来回晃 = 抖松砂，没埋的屎会往低处滑，倾狠了露盆底的尿· 端着点垃圾袋 = 装袋 · 点马桶 = 冲（只有豆腐砂能冲） · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">这只猫再来一坨</button></div>
 </div>
 <canvas id="cv"></canvas>
-<script type="module" src="sand.js?v=0.8"></script>
+<script type="module" src="sand.js?v=0.9"></script>
 </body>
 </html>
