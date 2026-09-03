@@ -26,10 +26,10 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadow
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x2a2118);
 const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 500);
-camera.position.set(6, 62, 44);
+camera.position.set(14, 74, 56);
 const controls = new OrbitControls(camera, cv);
-controls.target.set(6, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
-controls.minDistance = 25; controls.maxDistance = 120; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
+controls.target.set(12, 3, 0); controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.minDistance = 25; controls.maxDistance = 160; controls.maxPolarAngle = Math.PI * 0.42; controls.minPolarAngle = 0.15;
 controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
 controls.update();
@@ -43,6 +43,7 @@ const fill = new THREE.DirectionalLight(0xcfe3ff, 0.5); fill.position.set(30, 30
 
 // 猫砂盆：圆角矩形塑料盆，壁略外倾，顶上一圈翻边。ExtrudeGeometry 带倒角
 function roundRectShape(w, d, r) { const sh = new THREE.Shape(); sh.moveTo(-w / 2 + r, -d / 2); sh.lineTo(w / 2 - r, -d / 2); sh.quadraticCurveTo(w / 2, -d / 2, w / 2, -d / 2 + r); sh.lineTo(w / 2, d / 2 - r); sh.quadraticCurveTo(w / 2, d / 2, w / 2 - r, d / 2); sh.lineTo(-w / 2 + r, d / 2); sh.quadraticCurveTo(-w / 2, d / 2, -w / 2, d / 2 - r); sh.lineTo(-w / 2, -d / 2 + r); sh.quadraticCurveTo(-w / 2, -d / 2, -w / 2 + r, -d / 2); return sh; }
+const trayGroup = new THREE.Group(); scene.add(trayGroup); /* 盆+砂+屎都挂在这里，端盆时整体转 */
 const plastic = new THREE.MeshPhysicalMaterial({ color: 0x9fb3c8, roughness: 0.45, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.4 });
 const plasticIn = new THREE.MeshPhysicalMaterial({ color: 0x8ea3b8, roughness: 0.5, metalness: 0, clearcoat: 0.2, side: THREE.BackSide });
 {
@@ -51,23 +52,25 @@ const plasticIn = new THREE.MeshPhysicalMaterial({ color: 0x8ea3b8, roughness: 0
   const holePath = roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R);
   outer.holes.push(new THREE.Path(holePath.getPoints(24)));
   const wall = new THREE.Mesh(new THREE.ExtrudeGeometry(outer, { depth: WALL_H, bevelEnabled: true, bevelThickness: 0.5, bevelSize: 0.5, bevelSegments: 3, curveSegments: 24 }), plastic);
-  wall.rotation.x = -Math.PI / 2; wall.position.y = 0; wall.castShadow = true; wall.receiveShadow = true; scene.add(wall);
+  wall.rotation.x = -Math.PI / 2; wall.position.y = 0; wall.castShadow = true; wall.receiveShadow = true; trayGroup.add(wall);
   // 翻边
   const lipOuter = roundRectShape(TRAY_W + WALL * 2 + 6, TRAY_D + WALL * 2 + 6, R + WALL + 2);
   lipOuter.holes.push(new THREE.Path(roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R).getPoints(24)));
   const lip = new THREE.Mesh(new THREE.ExtrudeGeometry(lipOuter, { depth: 1.1, bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.35, bevelSegments: 2, curveSegments: 24 }), plastic);
-  lip.rotation.x = -Math.PI / 2; lip.position.y = WALL_H - 0.2; lip.castShadow = true; lip.receiveShadow = true; scene.add(lip);
+  lip.rotation.x = -Math.PI / 2; lip.position.y = WALL_H - 0.2; lip.castShadow = true; lip.receiveShadow = true; trayGroup.add(lip);
   // 盆底
   const floorM = new THREE.Mesh(new THREE.ExtrudeGeometry(roundRectShape(TRAY_W + WALL * 2 + 2, TRAY_D + WALL * 2 + 2, R + WALL), { depth: 1.2, bevelEnabled: false }), plastic);
-  floorM.rotation.x = -Math.PI / 2; floorM.position.y = -1.2; floorM.receiveShadow = true; scene.add(floorM);
+  floorM.rotation.x = -Math.PI / 2; floorM.position.y = -1.2; floorM.receiveShadow = true; trayGroup.add(floorM);
   // 内壁（反面，压暗）
   const inner = new THREE.Mesh(new THREE.ExtrudeGeometry(roundRectShape(TRAY_W + 0.4, TRAY_D + 0.4, R), { depth: WALL_H, bevelEnabled: false, curveSegments: 24 }), plasticIn);
-  inner.rotation.x = -Math.PI / 2; inner.receiveShadow = true; scene.add(inner);
+  inner.rotation.x = -Math.PI / 2; inner.receiveShadow = true; trayGroup.add(inner);
 }
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x3b3128, roughness: 1 })); ground.rotation.x = -Math.PI / 2; ground.position.y = -1; ground.receiveShadow = true; scene.add(ground);
 
 // ---------- 高度场 ----------
-const h = new Float32Array(N * N), tmp = new Float32Array(N * N), jit = new Float32Array(N * N);
+const h = new Float32Array(N * N), tmp = new Float32Array(N * N), jit = new Float32Array(N * N), bias = new Float32Array(N * N); /* bias：端盆倾斜带来的势能 */
+const TILT = { x: 0, z: 0, tx: 0, tz: 0 };
+function updateBias() { const gx = Math.tan(TILT.z), gz = -Math.tan(TILT.x); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const wx = -TRAY_W / 2 + x * CELL; const wz = (row0z < 0 ? -TRAY_D / 2 + y * CELL : TRAY_D / 2 - y * CELL); bias[gi(x, y)] = wx * gx + wz * gz; } }
 const gi = (ix, iy) => iy * N + ix;
 function resetSand() { for (let i = 0; i < h.length; i++) { h[i] = BASE_H + (Math.random() - 0.5) * 0.12; jit[i] = 0.9 + 0.2 * Math.random(); } if (typeof clearClumps === 'function') clearClumps(); dirty = true; }
 
@@ -94,7 +97,7 @@ const pos = sandGeo.attributes.position;
 const row0z = pos.getZ(0);
 const sandMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: litter.rough, metalness: 0, normalMap: grainNormalTexture(litter.grain), normalScale: new THREE.Vector2(0.6, 0.6), vertexColors: true });
 sandGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * N * 3).fill(1), 3));
-const sand = new THREE.Mesh(sandGeo, sandMat); sand.castShadow = true; sand.receiveShadow = true; scene.add(sand);
+const sand = new THREE.Mesh(sandGeo, sandMat); sand.castShadow = true; sand.receiveShadow = true; trayGroup.add(sand);
 let dirty = true;
 
 // ---------- 屎的种类 × 猫的习惯 ----------
@@ -119,10 +122,10 @@ const CATS = {
 let cat = CATS.granny;
 function pickType(c) { const ks = Object.keys(c.w); let t = 0; for (const k of ks) t += c.w[k]; let r = Math.random() * t; for (const k of ks) { r -= c.w[k]; if (r <= 0) return k; } return ks[0]; }
 const clumps = [];
-const clumpGroup = new THREE.Group(); scene.add(clumpGroup);
+const clumpGroup = new THREE.Group(); trayGroup.add(clumpGroup);
 // 砂面染色（尿/稀屎的湿印）
-const tint = new Float32Array(N * N);
-function stainAt(x, z, r, amt) { brush(x, z, r, amt, (i, a) => { tint[i] = Math.min(1, tint[i] + a); }); }
+const tint = new Float32Array(N * N), floorTint = new Float32Array(N * N); /* floorTint：渗到盆底的尿 */
+function stainAt(x, z, r, amt) { brush(x, z, r, amt, (i, a) => { tint[i] = Math.min(1, tint[i] + a); floorTint[i] = Math.min(1, floorTint[i] + a * 0.7); }); }
 // 平滑的砂团（端起来时包着屎的那层结块壳）：用叠加正弦做圆润的凹凸，不用随机顶点
 function sandBall(r, flat = 1) {
   const g = new THREE.SphereGeometry(r, 36, 24); const p = g.attributes.position; const v = new THREE.Vector3();
@@ -151,7 +154,7 @@ function bury(x, z, type, depth) {
   clumps.push(c); dirty = true; return c;
 }
 function buryByCat(n = 1) { for (let k = 0; k < n; k++) { const type = pickType(cat); const d = cat.depth[0] + Math.random() * (cat.depth[1] - cat.depth[0]); bury((Math.random() - 0.5) * (TRAY_W - 14), (Math.random() - 0.5) * (TRAY_D - 14), type, d); } }
-function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; tint.fill(0); }
+function clearClumps() { for (const c of clumps) clumpGroup.remove(c.mesh); clumps.length = 0; tint.fill(0); floorTint.fill(0); }
 // 埋着的：砂面钳在壳的穹顶之上；没埋的：坐在砂面上
 function updateClumps() {
   for (const c of clumps) {
@@ -169,7 +172,10 @@ function pushGeometry() {
     const hl = h[i - (x > 0 ? 1 : 0)], hr = h[i + (x < N - 1 ? 1 : 0)], hu = h[i - (y > 0 ? N : 0)], hd = h[i + (y < N - 1 ? N : 0)];
     let nx = (hl - hr) / (2 * CELL), nz = (hu - hd) / (2 * CELL) * zSign, ny = 1; const l = Math.hypot(nx, ny, nz);
     na[i * 3] = nx / l; na[i * 3 + 1] = ny / l; na[i * 3 + 2] = nz / l;
-    const t = tint[i], w = litter.wet; ca[i * 3] = 1 - t * (1 - w[0]); ca[i * 3 + 1] = 1 - t * (1 - w[1]); ca[i * 3 + 2] = 1 - t * (1 - w[2]);
+    const t = tint[i], w = litter.wet; let r = 1 - t * (1 - w[0]), g = 1 - t * (1 - w[1]), b = 1 - t * (1 - w[2]);
+    const f = h[i] < 0.6 ? (0.6 - h[i]) / 0.6 : 0; /* 砂少于 0.6 露出盆底：灰蓝塑料 + 卡在底上的尿渍 */
+    if (f > 0) { const ft = floorTint[i]; const fr = 0.55 + ft * 0.45, fg = 0.62 + ft * 0.15, fb = 0.78 - ft * 0.45; r = r * (1 - f) + fr * f; g = g * (1 - f) + fg * f; b = b * (1 - f) + fb * f; }
+    ca[i * 3] = r; ca[i * 3 + 1] = g; ca[i * 3 + 2] = b;
   }
   pos.needsUpdate = true; nrm.needsUpdate = true; sandGeo.attributes.color.needsUpdate = true;
 }
@@ -180,15 +186,16 @@ function worldToGrid(x, z) { const ix = (x + TRAY_W / 2) / TRAY_W * (N - 1); let
 // 休止角坍落：八邻居（对角线距离 √2 格），相邻高差超过 tan(角)·距离 的部分按 slumpK 往低处流，带一点随机让堆变圆。每帧 2 遍。[调]
 const NB = [[1, 0, 1], [0, 1, 1], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2]];
 function slump(iter = 2) {
-  const T0 = Math.tan(litter.talus * Math.PI / 180) * CELL, k = litter.slumpK;
+  const jostle = Math.min(1, (Math.abs(TILT.x) + Math.abs(TILT.z)) * 1.6); /* 端着盆晃，砂松动，休止角降到六成 */
+  const T0 = Math.tan(litter.talus * (1 - 0.4 * jostle) * Math.PI / 180) * CELL, k = litter.slumpK * (1 + jostle);
   let moved = 0;
   for (let it = 0; it < iter; it++) {
     tmp.fill(0);
     for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-      const i = gi(x, y), hi = h[i];
+      const i = gi(x, y), hi = h[i] + bias[i];
       for (const [dx, dy, dist] of NB) {
         const nx = x + dx, ny = y + dy; if (nx < 0 || nx >= N || ny >= N) continue;
-        const j = gi(nx, ny), T = T0 * dist * jit[i], d = hi - h[j];
+        const j = gi(nx, ny), T = T0 * dist * jit[i], d = hi - (h[j] + bias[j]);
         if (d > T) { const m = (d - T) * k * 0.25 / dist; tmp[i] -= m; tmp[j] += m; }
         else if (d < -T) { const m = (-d - T) * k * 0.25 / dist; tmp[i] += m; tmp[j] -= m; }
       }
@@ -242,7 +249,7 @@ const blade = new THREE.Group(); scoop.add(blade);
 const pileGeo = new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2); { const p = pileGeo.attributes.position; for (let i = 0; i < p.count; i++) { const k = 1 + (Math.random() - 0.5) * 0.12; p.setXYZ(i, p.getX(i) * k, p.getY(i), p.getZ(i) * k); } pileGeo.computeVertexNormals(); }
 const pileMat = new THREE.MeshStandardMaterial({ color: litter.color, roughness: 1, normalMap: sandMat.normalMap, normalScale: new THREE.Vector2(0.8, 0.8) });
 const pile = new THREE.Mesh(pileGeo, pileMat); pile.castShadow = true; pile.position.y = 0.05; blade.add(pile);
-const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0 };
+const SC = { state: 'hover', V: 0, held: [], px: 0, pz: 0, vx: 0, vz: 0, tilt: 0, floor: 0, bagClumps: 0, wasted: 0, y: 0, shake: 0, digCaught: false, overWall: false };
 // 漏砂粒子
 const PMAX = 4000;
 const pPos = new Float32Array(PMAX * 3), pVel = new Float32Array(PMAX * 3), pAmt = new Float32Array(PMAX); const pAlive = new Uint8Array(PMAX); let pHead = 0;
@@ -281,11 +288,12 @@ function scoopDig(dt) {
     const inner = new Set(cells); const ring = bladeCells(1.4).filter(i => !inner.has(i));
     const per = removed * 0.22 / Math.max(1, ring.length); for (const i of ring) h[i] += per;
   }
-  for (let k = clumps.length - 1; k >= 0; k--) {
-    const c = clumps[k]; const [lx, lz] = toLocal(c.x, c.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue;
-    const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; /* 铲刃滑到它底下 */
-    if (!under) continue;
-    clumps.splice(k, 1); clumpGroup.remove(c.mesh);
+  if (SC.digCaught) return; /* 一次铲入最多端起一坨；端着可以再铲下一坨 */
+  let best = null, bd = 1e9;
+  for (const c of clumps) { const [lx, lz] = toLocal(c.x, c.z); if (Math.abs(lx) > BW / 2 - 0.5 || Math.abs(lz) > BD / 2 - 0.5) continue; const under = c.buried ? SC.floor <= c.y0 + c.r * 0.45 : SC.floor <= c.mesh.position.y - 0.2; if (!under) continue; const d = lx * lx + lz * lz; if (d < bd) { bd = d; best = c; } }
+  if (best) {
+    const c = best; const [lx, lz] = toLocal(c.x, c.z); const k = clumps.indexOf(c);
+    SC.digCaught = true; clumps.splice(k, 1); clumpGroup.remove(c.mesh);
     const T = POOP_TYPES[c.type]; const holder = new THREE.Group();
     if (c.buried && litter.clumping) { const ball = new THREE.Mesh(sandBall(c.r * 0.95, T.shape === 'none' ? 0.9 : 1), ballMat()); ball.castShadow = true; holder.add(ball); c.ball = ball; c.mesh.position.set(0, c.r * 0.15, 0); holder.add(c.mesh); }
     else if (c.buried) { c.mesh.position.set(0, 0, 0); holder.add(c.mesh); }
@@ -296,13 +304,16 @@ function scoopDig(dt) {
 }
 function scoopDump() { SC.bagClumps += SC.held.length; for (const c of SC.held) blade.remove(c.holder || c.mesh); SC.held = []; SC.wasted += SC.V; SC.V = 0; }
 function updateScoop(dt) {
-  if (!hit) { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
+  if (!hit || tool === 'lift') { scoop.visible = false; return; } scoop.visible = tool === 'scoop';
   if (tool !== 'scoop') return;
-  const tx = Math.max(-TRAY_W / 2 - 6, Math.min(TRAY_W / 2 + 6, hit.x)), tz = Math.max(-TRAY_D / 2 - 6, Math.min(TRAY_D / 2 + 6, hit.z));
+  const tx = Math.max(-TRAY_W / 2 - 30, Math.min(TRAY_W / 2 + 40, hit.x)), tz = Math.max(-TRAY_D / 2 - 30, Math.min(TRAY_D / 2 + 30, hit.z));
   const nx = SC.px + (tx - SC.px) * Math.min(1, dt * 18), nz = SC.pz + (tz - SC.pz) * Math.min(1, dt * 18);
   SC.vx = (nx - SC.px) / Math.max(dt, 1e-3); SC.vz = (nz - SC.pz) / Math.max(dt, 1e-3); SC.px = nx; SC.pz = nz;
   const speed = Math.hypot(SC.vx, SC.vz); SC.shake = SC.shake * 0.85 + Math.min(1, speed / 45) * 0.15;
-  const [gx, gy] = worldToGrid(SC.px, SC.pz); const inside = Math.abs(SC.px) <= TRAY_W / 2 && Math.abs(SC.pz) <= TRAY_D / 2;
+  const [gx, gy] = worldToGrid(SC.px, SC.pz);
+  // 铲面四角任一角压到盆壁或盆外 → 抬到盆沿以上，不能铲（碰撞）
+  SC.overWall = false; for (const [cx, cz] of [[-BW / 2, -BD / 2], [BW / 2, -BD / 2], [-BW / 2, BD / 2], [BW / 2, BD / 2]]) { const wx = SC.px + cx * Math.cos(YAW) + cz * Math.sin(YAW), wz = SC.pz - cx * Math.sin(YAW) + cz * Math.cos(YAW); if (Math.abs(wx) > TRAY_W / 2 - 0.8 || Math.abs(wz) > TRAY_D / 2 - 0.8) { SC.overWall = true; break; } }
+  const inside = !SC.overWall;
   const hs = inside ? h[gi(Math.max(0, Math.min(N - 1, Math.round(gx))), Math.max(0, Math.min(N - 1, Math.round(gy))))] : BASE_H;
   if (pressing && inside) {
     if (SC.state !== 'dig') { SC.state = 'dig'; SC.floor = hs - DIG_DEPTH; }
@@ -310,7 +321,7 @@ function updateScoop(dt) {
     scoopDig(dt);
   } else {
     SC.state = (SC.V > 1 || SC.held.length) ? 'carry' : 'hover';
-    const ty = Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
+    const ty = SC.overWall ? WALL_H + 3.2 + (SC.state === 'carry' ? 1 : 0) : Math.max(hs, BASE_H) + 2.2 + (SC.state === 'carry' ? 1.5 : 0);
     SC.y += (ty - SC.y) * Math.min(1, dt * 8); SC.tilt += ((SC.state === 'carry' ? 0.06 : -0.1) - SC.tilt) * Math.min(1, dt * 6);
     if (litter.crumble && SC.shake > 0.45) for (const c of SC.held) if (c.ball && c.ball.scale.x > 0.72) { c.ball.scale.multiplyScalar(1 - dt * litter.crumble * SC.shake * 0.6); SC.V += 0.4; spawnLeak(2, 0.2); }
     if (SC.V > 0.5) { const rate = litter.leak * (0.28 + 3.2 * SC.shake); const dV = Math.min(SC.V, SC.V * rate * dt + 0.3 * dt * litter.leak); SC.V -= dV; const n = Math.min(80, Math.max(1, Math.round(dV / 0.5))); spawnLeak(n, dV / n); }
@@ -320,12 +331,12 @@ function updateScoop(dt) {
 }
 // ---------- 丢的地方：垃圾袋 + 马桶 ----------
 const bagMat = new THREE.MeshPhysicalMaterial({ color: 0xf4f4f0, roughness: 0.55, transparent: true, opacity: 0.92, side: THREE.DoubleSide });
-const bag = new THREE.Group(); bag.position.set(TRAY_W / 2 + 11, 0, 9); scene.add(bag);
+const bag = new THREE.Group(); bag.position.set(TRAY_W / 2 + 18, 0, 14); bag.scale.setScalar(1.7); scene.add(bag);
 { const prof = []; for (let i = 0; i <= 14; i++) { const t = i / 14; const rr = 3.2 + Math.sin(t * 9) * 0.25 + t * 1.1; prof.push(new THREE.Vector2(rr * (i === 0 ? 0.6 : 1), t * 8.5)); }
   const body = new THREE.Mesh(new THREE.LatheGeometry(prof, 28), bagMat); body.castShadow = true; body.receiveShadow = true; bag.add(body);
   const lip = new THREE.Mesh(new THREE.TorusGeometry(4.3, 0.22, 8, 36), bagMat); lip.rotation.x = Math.PI / 2; lip.position.y = 8.5; bag.add(lip);
   const inside = new THREE.Mesh(new THREE.CircleGeometry(3.4, 28), new THREE.MeshStandardMaterial({ color: 0x2a2118 })); inside.rotation.x = -Math.PI / 2; inside.position.y = 6.5; bag.add(inside); }
-const toilet = new THREE.Group(); toilet.position.set(TRAY_W / 2 + 13, 0, -10); scene.add(toilet);
+const toilet = new THREE.Group(); toilet.position.set(TRAY_W / 2 + 26, 0, -16); toilet.scale.setScalar(2.4); scene.add(toilet);
 const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32), new THREE.MeshPhysicalMaterial({ color: 0xbfe0f0, roughness: 0.05, transparent: true, opacity: 0.9 }));
 { const cer = new THREE.MeshPhysicalMaterial({ color: 0xf7f7f5, roughness: 0.18, clearcoat: 0.8 });
   const base = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.8, 7, 28), cer); base.position.y = 3.5; base.castShadow = true; base.receiveShadow = true; toilet.add(base);
@@ -340,6 +351,14 @@ function dumpTo(where) {
   if (where === 'bag') { DISP.bag += n; SC.wasted += v; DISP.msg = n ? `${n} 坨进袋${v > 300 ? '，带了不少砂' : ''}` : '倒了一铲砂进袋'; }
   else if (!litter.flushable && (v > 250 || n)) { DISP.clogged++; DISP.clogT = 2.5; DISP.msg = litter.noFlush; }
   else { DISP.flushed += n; DISP.flushT = 1.4; DISP.msg = n ? `冲走 ${n} 坨` : '冲了一下'; }
+}
+function updateLift(dt) {
+  if (tool !== 'lift') { TILT.tx = 0; TILT.tz = 0; }
+  const k = Math.min(1, dt * 6); const ox = TILT.x, oz = TILT.z;
+  TILT.x += (TILT.tx - TILT.x) * k; TILT.z += (TILT.tz - TILT.z) * k;
+  trayGroup.rotation.set(TILT.x, 0, TILT.z); trayGroup.position.y = tool === 'lift' ? 6 : 0;
+  if (Math.abs(TILT.x - ox) > 1e-4 || Math.abs(TILT.z - oz) > 1e-4 || (tool === 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) > 0.01)) updateBias();
+  if (tool !== 'lift' && Math.abs(TILT.x) + Math.abs(TILT.z) < 1e-3 && (ox !== 0 || oz !== 0)) { TILT.x = TILT.z = 0; updateBias(); }
 }
 function updateDispose(dt) {
   if (DISP.flushT > 0) { DISP.flushT -= dt; water.rotation.z += dt * 9; water.scale.setScalar(0.55 + Math.abs(Math.sin(DISP.flushT * 4)) * 0.45); water.material.color.set(0xbfe0f0); }
@@ -361,8 +380,11 @@ function pick(e) {
 const inTray = p => p && Math.abs(p.x) <= TRAY_W / 2 && Math.abs(p.z) <= TRAY_D / 2;
 cv.addEventListener('pointerdown', e => { if (e.button !== 0) return; hit = pick(e);
   if (tool === 'scoop') { const rect = cv.getBoundingClientRect(); ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1); ray.setFromCamera(ndc, camera); if (SC.V > 1 || SC.held.length) { if (ray.intersectObject(bag, true).length) { dumpTo('bag'); return; } if (ray.intersectObject(toilet, true).length) { dumpTo('toilet'); return; } } }
+  if (tool === 'scoop') { SC.digCaught = false; pressing = true; cv.setPointerCapture(e.pointerId); return; }
+  if (tool === 'lift') { pressing = true; liftStart = { x: e.clientX, y: e.clientY, tx: TILT.tx, tz: TILT.tz }; cv.setPointerCapture(e.pointerId); return; }
   if (inTray(hit)) { pressing = true; cv.setPointerCapture(e.pointerId); } });
-cv.addEventListener('pointermove', e => { hit = pick(e); });
+let liftStart = null;
+cv.addEventListener('pointermove', e => { hit = pick(e); if (tool === 'lift' && pressing && liftStart) { TILT.tz = Math.max(-0.9, Math.min(0.9, liftStart.tz - (e.clientX - liftStart.x) / 220)); TILT.tx = Math.max(-0.9, Math.min(0.9, liftStart.tx + (e.clientY - liftStart.y) / 220)); } });
 cv.addEventListener('pointerup', () => { pressing = false; if (SC.state === 'dig') SC.state = 'carry'; });
 cv.addEventListener('pointercancel', () => { pressing = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
@@ -390,11 +412,11 @@ let last = performance.now(), fpsT = 0, frames = 0;
 window.SAND = { h, N, litter: () => litter, slump, reset: resetSand, camera, controls, clumps, bury: buryByCat, SC, bag, toilet, DISP, POOP_TYPES, CATS, setCat: k => { cat = CATS[k]; } };
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (pressing && inTray(hit) && tool !== 'scoop') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
+  if (pressing && inTray(hit) && tool !== 'scoop' && tool !== 'lift') { if (tool === 'press') press(hit.x, hit.z, brushSize, dt); else if (tool === 'pour') pour(hit.x, hit.z, brushSize, dt); else smooth(hit.x, hit.z, brushSize, dt); }
   slump(2); settle(0.03);
   if (dirty) { pushGeometry(); dirty = false; }
   updateClumps();
-  updateScoop(dt); updateParticles(dt); updateDispose(dt);
+  updateLift(dt); updateScoop(dt); updateParticles(dt); updateDispose(dt);
   if (hit && tool !== 'scoop') { cursor.visible = inTray(hit); const [gx, gy] = worldToGrid(hit.x, hit.z); const hy = h[gi(Math.round(Math.max(0, Math.min(N - 1, gx))), Math.round(Math.max(0, Math.min(N - 1, gy))))] || 0; cursor.position.set(hit.x, hy + 0.15, hit.z); cursor.scale.setScalar(brushSize); } else cursor.visible = false;
   if (tool === 'scoop') cursor.visible = false;
   controls.update(); renderer.render(scene, camera);

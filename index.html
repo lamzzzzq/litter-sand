@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>猫砂盆 · 砂的物理</title>
-<link rel="stylesheet" href="style.css?v=0.5.1">
+<link rel="stylesheet" href="style.css?v=0.6.1">
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
 </head>
 <body>
 <div id="ui">
   <div class="row">
-    <b>猫砂盆 · 砂</b><span class="sub">v0.1 · v0.5 · 右手持铲 · 四种砂的铲感 · 垃圾袋/马桶</span>
+    <b>猫砂盆 · 砂</b><span class="sub">v0.1 · v0.6 · 一次一坨 · 出盆抬高 · 双手端盆</span>
     <span id="fps" class="sub"></span>
   </div>
   <div class="row">
@@ -26,14 +26,14 @@
   </div>
   <div class="row">
     <span class="lbl">手</span>
-    <button data-tool="scoop" class="on">猫砂铲</button><button data-tool="press">指压</button>
+    <button data-tool="scoop" class="on">猫砂铲</button><button data-tool="lift">双手端盆</button><button data-tool="press">指压</button>
     <button data-tool="pour">倒砂</button>
     <button data-tool="smooth">抹平</button>
     <span class="lbl">大小</span><input id="size" type="range" min="1" max="8" step="0.5" value="3">
   </div>
-  <div class="row hint">铲：按住拖 = 铲入砂里 · 松开 = 端起（砂从缝里漏，晃得快漏得快，屎卡在条上）· 端着点垃圾袋 = 装袋 · 点马桶 = 冲（只有豆腐砂能冲） · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">这只猫再来一坨</button></div>
+  <div class="row hint">铲：按住拖 = 铲入，一次最多端起一坨，端着可以再铲 · 松开 = 端起（砂从缝里漏，屎卡在条上）· 出盆自动抬高 · 端盆：按住拖 = 左右前后倾，砂往低处流，看盆底的尿· 端着点垃圾袋 = 装袋 · 点马桶 = 冲（只有豆腐砂能冲） · 右键 = 转视角 · <button id="reset" class="ghost">重置</button> <button id="flat" class="ghost">全盆抹平</button> <button id="bury" class="ghost">这只猫再来一坨</button></div>
 </div>
 <canvas id="cv"></canvas>
-<script type="module" src="sand.js?v=0.5.1"></script>
+<script type="module" src="sand.js?v=0.6.1"></script>
 </body>
 </html>
